@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Cannon Defense</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2430; font-family: sans-serif; touch-action: none; user-select: none; }
+    canvas { display: block; }
+    #hud { position: fixed; top: 10px; left: 0; right: 0; text-align: center; color: #fff; font-size: 17px; font-weight: bold; text-shadow: 0 2px 4px #000; pointer-events: none; }
+    #bossbar { position: fixed; top: 44px; left: 50%; width: 320px; max-width: 80%; height: 16px; transform: translateX(-50%); background: rgba(0,0,0,.55); border: 2px solid #fff; border-radius: 8px; overflow: hidden; display: none; pointer-events: none; }
+    #bossfill { height: 100%; width: 100%; background: #e23b3b; }
+    #bosstext { position: fixed; top: 62px; left: 0; right: 0; text-align: center; color: #fff; font-size: 13px; font-weight: bold; text-shadow: 0 1px 3px #000; display: none; pointer-events: none; }
+    #over { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,.65); color: #fff; text-align: center; }
+    #ovTitle { font-size: 36px; font-weight: bold; }
+    #ovSub { font-size: 18px; margin-top: 12px; line-height: 1.6; white-space: pre-line; }
+    #ovHint { font-size: 15px; margin-top: 18px; opacity: .8; }
+    #stagePick { display: flex; gap: 10px; margin-top: 22px; }
+    #stagePick button { width: 48px; height: 48px; font-size: 20px; font-weight: bold; color: #fff; background: rgba(255,255,255,.12); border: 2px solid #fff; border-radius: 8px; cursor: pointer; }
+    #stagePick button.cur { background: #3a7bd5; }
+    #stagePick button:focus-visible { outline: 3px solid #ffd23a; }
+  </style>
+</head>
+<body>
+  <div id="hud"></div>
+  <div id="bossbar"><div id="bossfill"></div></div>
+  <div id="bosstext"></div>
+  <div id="over"><div id="ovTitle"></div><div id="ovSub"></div><div id="ovHint"></div><div id="stagePick"></div></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
