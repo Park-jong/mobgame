@@ -1,22 +1,17 @@
 import * as THREE from 'three';
+import gameData from './data/game.json';
+import {
+  FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
+} from './shared/world.js';
 
 // ================= 설정 =================
-const FIELD_W = 7;          // 전장: x -7 ~ 7 (적이 내려오는 곳)
-const LANE_GAP = 0.5;       // 전장과 옆 구역 사이 간격
-const LANE_W = 4;           // 옆 독립 구역 폭
-const LANE_X = FIELD_W + LANE_GAP + LANE_W / 2;   // 옆 구역 중심 (왼쪽 -, 오른쪽 +)
-const WORLD_HALF = FIELD_W + LANE_GAP + LANE_W;   // 대포·병사가 갈 수 있는 x 한계
-const SPAWN_Z = -16;        // 적 생성 위치
-const BASE_Z = 8;           // 방어선
-const CANNON_Z = 9;
+// 월드 치수 상수(FIELD_W, LANE_*, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_*)는 에디터와 공유한다
 const MAX_SOLDIERS = 10000;
 const MAX_ENEMIES = 1500;
-const SOLDIER_SPEED = 3;
 const SOLDIER_R = 0.3;
 const HOMING_R = 3.5;       // 유도 감지 반경
 const ENEMY_HOMING_R = 3;   // 적 유도 감지 반경
 const HOMING_SLOW = 0.6;    // 유도 중인 병사·적의 전진 속도 배율
-const GATE_SLOTS = 4;
 const MAX_CANNONS = 7;
 const CANNON_SCALE = 0.8;   // 대포 모델 크기 (밀집 배치용)
 const CANNON_SPACING = 1.15; // 인접 대포 사이 거리
@@ -38,69 +33,197 @@ for (let n = 0; n <= MAX_CANNONS; n++) {
   }
   CANNON_OFFSETS.push(list);
 }
-const WAVE_DUR = 14;        // 일반 웨이브 길이(초), 일반 3웨이브 + 보스 웨이브
-const SPAWN_MULT = 1;      // 적 생성량 배율 (성능 확인할 때만 올린다)
-const BASE_HP = 20;
+// ================= 데이터 (src/data/game.json) =================
+// 스테이지·적 종류·조정 수치는 JSON에서 읽는다. 잘못된 값은 sanitizeData가 기본값으로 대체하고 경고한다.
+const warn = (msg) => console.warn(`[game.json] ${msg}`);
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+function num(v, def, min, max, path) {
+  if (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max) return v;
+  warn(`${path}: 값이 없거나 범위(${min}~${max})를 벗어나 기본값 ${def} 사용`);
+  return def;
+}
+function str(v, def, path) {
+  if (typeof v === 'string') return v;
+  warn(`${path}: 문자열이 아니라 기본값 사용`);
+  return def;
+}
+function numList(v, def, path, min, max) {
+  if (!Array.isArray(v) || v.length !== def.length) {
+    warn(`${path}: 길이 ${def.length}의 배열이 아니라 기본값 사용`);
+    return def.slice();
+  }
+  return v.map((x, i) => num(x, def[i], min, max, `${path}[${i}]`));
+}
+function color(v, def, path) {
+  if (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) return parseInt(v.slice(1), 16);
+  warn(`${path}: '#rrggbb' 형식이 아니라 기본값 사용`);
+  return def;
+}
 
-// 공격속도 6단계 (발사 간격) / 다음 단계에 필요한 타격 수
-const FIRE_INTERVALS = [1.00, 0.82, 0.67, 0.55, 0.45, 0.35];
-const HIT_TARGETS = [20, 40, 70, 110, 160];
-const LEVEL_COLORS = [0x6b7480, 0x4fa3ff, 0x4fe0a0, 0xd8e04f, 0xff9a2a, 0xffd23a];
-
-// 적 종류
-const E_NORMAL = 0, E_RUNNER = 1, E_TANK = 2, E_BOSS = 3;
-const ETYPE = [
-  { name: '일반병', hp: 1, speed: 1,   r: 0.45, scale: 1,   dmg: 1, score: 1,   color: 0xe84a4a },
-  { name: '러너',   hp: 2, speed: 2,   r: 0.35, scale: 0.8, dmg: 1, score: 2,   color: 0xff9a2a },
-  { name: '탱커',   hp: 8, speed: 0.6, r: 0.8,  scale: 1.9, dmg: 3, score: 5,   color: 0x7a3fb0 },
+const DEFAULT_CONFIG = {
+  soldierSpeed: 3, fireIntervals: [1.00, 0.82, 0.67, 0.55, 0.45, 0.35], hitTargets: [20, 40, 70, 110, 160],
+  baseHp: 20, waveDur: 14, itemInterval: 8, itemFirstDelay: 3, crystalZ: -5.5,
+};
+const DEFAULT_ETYPES = [
+  { name: '일반병', hp: 1, speed: 1,   r: 0.45, scale: 1,   dmg: 1,  score: 1,   color: 0xe84a4a },
+  { name: '러너',   hp: 2, speed: 2,   r: 0.35, scale: 0.8, dmg: 1,  score: 2,   color: 0xff9a2a },
+  { name: '탱커',   hp: 8, speed: 0.6, r: 0.8,  scale: 1.9, dmg: 3,  score: 5,   color: 0x7a3fb0 },
   { name: '보스',   hp: 0, speed: 0.3, r: 1.6,  scale: 4,   dmg: 10, score: 100, color: 0x8b1a1a },
 ];
+const DEFAULT_STAGE = {
+  desc: '', gates: [{ op: '×', val: 2, x: 0, z: 3, w: FIELD_W * 2 }],
+  crystal: true, items: true, crystalSide: -1, itemSide: 1, runner: 0, tank: 0,
+  boss: { name: '보스', hp: 60, speed: 0.3, dmg: 10 },
+};
+const MAX_ESCORT = 8; // 호위병 상한 (ENEMY_RESERVE 슬롯 안에 들어가도록)
 
-// 게이트는 맵 좌우를 꽉 채운다: 한 줄에 1개(전체 폭) 또는 2개(각 절반 폭). [op, val, x, z, 폭]
-const rowOf1 = ([op, val], z) => [[op, val, 0, z, FIELD_W * 2]];
-const rowOf2 = ([op1, v1], [op2, v2], z) => [
-  [op1, v1, -FIELD_W / 2, z, FIELD_W],
-  [op2, v2, FIELD_W / 2, z, FIELD_W],
-];
+function sanitizeData(raw) {
+  const d = isObj(raw) ? raw : {};
+  if (!isObj(raw)) warn('최상위가 객체가 아니라 전부 기본값 사용');
 
-// 스테이지 5개
-const STAGES = [
-  {
-    desc: '일반병이 밀려옵니다.\n파란 게이트로 병사를 늘리세요.\n노란 구역: 크리스털 타격 → 공격속도 · 초록 구역: + 상자 → 대포 추가',
-    gates: [...rowOf2(['×', 2], ['+', 10], 3)],
-    crystal: true, items: true, crystalSide: -1, itemSide: 1, // 테스트용: 1스테이지부터 강화 전부 등장
-    runner: 0, tank: 0,
-    boss: { name: '거대병', hp: 60, speed: 0.3, dmg: 10 },
-  },
-  {
-    desc: '러너 등장!\n노란 크리스털을 타격하면 공격속도가 오릅니다.',
-    gates: [...rowOf2(['×', 2], ['+', 10], 3), ...rowOf1(['×', 3], 0)],
-    crystal: true, items: true, crystalSide: 1, itemSide: -1,
-    runner: 0.25, tank: 0,
-    boss: { name: '질주 대장', hp: 80, speed: 0.5, dmg: 10, escort: 8 },
-  },
-  {
-    desc: '탱커 등장!\n내려오는 초록 + 상자에 대포를 닿게 하면 대포가 늘어납니다.',
-    gates: [...rowOf2(['×', 2], ['+', 10], 3), ...rowOf1(['×', 3], 0)],
-    crystal: true, items: true, crystalSide: -1, itemSide: 1,
-    runner: 0.25, tank: 0.12,
-    boss: { name: '철갑 거인', hp: 200, speed: 0.2, dmg: 10 },
-  },
-  {
-    desc: '물량이 늘어납니다.\n게이트가 부서지지 않게 막으세요.',
-    gates: [...rowOf2(['×', 2], ['+', 10], 3), ...rowOf1(['×', 3], 0), ...rowOf1(['+', 15], -3)],
-    crystal: true, items: true, crystalSide: 1, itemSide: -1,
-    runner: 0.3, tank: 0.15,
-    boss: { name: '소환사', hp: 250, speed: 0.3, dmg: 10, summon: 4 },
-  },
-  {
-    desc: '최종 스테이지!\n보스가 방어선에 닿으면 끝입니다.',
-    gates: [...rowOf2(['×', 2], ['+', 10], 3), ...rowOf1(['×', 3], 0), ...rowOf1(['+', 15], -3)],
-    crystal: true, items: true, crystalSide: -1, itemSide: 1,
-    runner: 0.3, tank: 0.2,
-    boss: { name: '최종 보스', hp: 500, speed: 0.25, dmg: 20, summon: 3.5 },
-  },
-];
+  const c = isObj(d.config) ? d.config : {};
+  if (!isObj(d.config)) warn('config: 객체가 아니라 기본값 사용');
+  const D = DEFAULT_CONFIG;
+  const config = {
+    soldierSpeed: num(c.soldierSpeed, D.soldierSpeed, 0.1, 50, 'config.soldierSpeed'),
+    fireIntervals: numList(c.fireIntervals, D.fireIntervals, 'config.fireIntervals', 0.02, 60),
+    hitTargets: numList(c.hitTargets, D.hitTargets, 'config.hitTargets', 1, 100000),
+    baseHp: num(c.baseHp, D.baseHp, 1, 100000, 'config.baseHp'),
+    waveDur: num(c.waveDur, D.waveDur, 1, 600, 'config.waveDur'),
+    itemInterval: num(c.itemInterval, D.itemInterval, 0.5, 600, 'config.itemInterval'),
+    itemFirstDelay: num(c.itemFirstDelay, D.itemFirstDelay, 0, 600, 'config.itemFirstDelay'),
+    crystalZ: num(c.crystalZ, D.crystalZ, SPAWN_Z, BASE_Z, 'config.crystalZ'),
+  };
+
+  const enemyTypes = DEFAULT_ETYPES.map((def, i) => {
+    const p = `enemyTypes[${i}]`;
+    const t = Array.isArray(d.enemyTypes) && isObj(d.enemyTypes[i]) ? d.enemyTypes[i] : null;
+    if (!t) warn(`${p}: 없어서 기본값 사용`);
+    const e = t || {};
+    return {
+      name: str(e.name, def.name, `${p}.name`),
+      hp: num(e.hp, def.hp, 0, 100000, `${p}.hp`),
+      speed: num(e.speed, def.speed, 0, 50, `${p}.speed`),
+      r: num(e.r, def.r, 0.05, 10, `${p}.r`),
+      scale: num(e.scale, def.scale, 0.1, 20, `${p}.scale`),
+      dmg: num(e.dmg, def.dmg, 0, 100000, `${p}.dmg`),
+      score: num(e.score, def.score, 0, 1000000, `${p}.score`),
+      color: color(e.color, def.color, `${p}.color`),
+    };
+  });
+
+  let rawStages = d.stages;
+  if (!Array.isArray(rawStages) || rawStages.length === 0) {
+    warn('stages: 비어 있거나 배열이 아니라 기본 스테이지 1개 사용');
+    rawStages = [DEFAULT_STAGE];
+  }
+  const side = (v, def, p) => {
+    if (v === -1 || v === 1) return v;
+    warn(`${p}: -1 또는 1이어야 해서 기본값 ${def} 사용`);
+    return def;
+  };
+  const bool = (v, def, p) => {
+    if (typeof v === 'boolean') return v;
+    warn(`${p}: bool이 아니라 기본값 ${def} 사용`);
+    return def;
+  };
+  const stages = rawStages.map((s0, i) => {
+    const p = `stages[${i}]`;
+    if (!isObj(s0)) warn(`${p}: 객체가 아니라 기본값 사용`);
+    const s = isObj(s0) ? s0 : {};
+    let rg = s.gates;
+    if (!Array.isArray(rg)) { warn(`${p}.gates: 배열이 아니라 기본 게이트 사용`); rg = DEFAULT_STAGE.gates; }
+    if (rg.length > GATE_SLOTS) { warn(`${p}.gates: ${rg.length}개는 GATE_SLOTS(${GATE_SLOTS})를 넘어 잘라냄`); rg = rg.slice(0, GATE_SLOTS); }
+    const gates = rg.map((g0, k) => {
+      const gp = `${p}.gates[${k}]`;
+      const g = isObj(g0) ? g0 : {};
+      let op = g.op;
+      if (op !== '×' && op !== '+') { warn(`${gp}.op: '×' 또는 '+'여야 해서 '+' 사용`); op = '+'; }
+      return {
+        op,
+        val: num(g.val, 1, 1, 100000, `${gp}.val`),
+        x: num(g.x, 0, -WORLD_HALF, WORLD_HALF, `${gp}.x`),
+        z: num(g.z, 0, SPAWN_Z, BASE_Z, `${gp}.z`),
+        w: num(g.w, FIELD_W, 0.5, FIELD_W * 2, `${gp}.w`),
+      };
+    });
+    if (!isObj(s.boss)) warn(`${p}.boss: 객체가 아니라 기본값 사용`);
+    const b = isObj(s.boss) ? s.boss : {};
+    const DB = DEFAULT_STAGE.boss;
+    const boss = {
+      name: str(b.name, DB.name, `${p}.boss.name`),
+      hp: num(b.hp, DB.hp, 1, 1000000, `${p}.boss.hp`),
+      speed: num(b.speed, DB.speed, 0, 50, `${p}.boss.speed`),
+      dmg: num(b.dmg, DB.dmg, 0, 100000, `${p}.boss.dmg`),
+    };
+    // 선택 필드: 있을 때만 검증해서 넣는다 (escort = 호위병 수, summon = 소환 간격 초)
+    if (b.escort !== undefined) boss.escort = Math.floor(num(b.escort, 0, 0, MAX_ESCORT, `${p}.boss.escort`));
+    if (b.summon !== undefined) boss.summon = num(b.summon, 4, 0.5, 600, `${p}.boss.summon`);
+    return {
+      desc: str(s.desc, '', `${p}.desc`),
+      gates,
+      crystal: bool(s.crystal, true, `${p}.crystal`),
+      items: bool(s.items, true, `${p}.items`),
+      crystalSide: side(s.crystalSide, -1, `${p}.crystalSide`),
+      itemSide: side(s.itemSide, 1, `${p}.itemSide`),
+      runner: num(s.runner, 0, 0, 1, `${p}.runner`),
+      tank: num(s.tank, 0, 0, 1, `${p}.tank`),
+      boss,
+    };
+  });
+  return { config, enemyTypes, stages };
+}
+
+// ?draft=1 이면 에디터가 저장한 임시본(localStorage)을 쓰고, 아니면 항상 번들된 game.json을 쓴다.
+const DRAFT_KEY = 'cannonDefense.draftData';
+let usingDraft = false;
+function loadSourceData() {
+  if (new URLSearchParams(location.search).get('draft') !== '1') return gameData;
+  try {
+    const text = localStorage.getItem(DRAFT_KEY);
+    if (text) {
+      const parsed = JSON.parse(text);
+      usingDraft = true;
+      return parsed;
+    }
+    console.warn(`[draft] localStorage['${DRAFT_KEY}']가 없어 번들 데이터 사용`);
+  } catch (e) {
+    console.warn(`[draft] 임시본을 읽지 못해 번들 데이터 사용: ${e.message}`);
+  }
+  return gameData;
+}
+const DATA = sanitizeData(loadSourceData());
+if (usingDraft) {
+  const badge = document.createElement('button');
+  badge.textContent = '임시본 사용 중 · 해제';
+  badge.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:50;padding:4px 10px;font-size:12px;'
+    + 'color:#fff;background:rgba(200,110,20,0.9);border:1px solid #ffd08a;border-radius:12px;cursor:pointer;';
+  badge.onclick = () => {
+    const u = new URL(location.href);
+    u.searchParams.delete('draft');
+    location.href = u.toString();
+  };
+  document.body.appendChild(badge);
+}
+const SOLDIER_SPEED = DATA.config.soldierSpeed;
+const WAVE_DUR = DATA.config.waveDur;        // 일반 웨이브 길이(초), 일반 3웨이브 + 보스 웨이브
+const SPAWN_MULT = 1;      // 적 생성량 배율 (성능 확인할 때만 올린다)
+const BASE_HP = DATA.config.baseHp;
+const ITEM_INTERVAL = DATA.config.itemInterval;      // 대포 추가 벽 생성 간격(초)
+const ITEM_FIRST_DELAY = DATA.config.itemFirstDelay; // 스테이지 시작 후 첫 벽까지(초)
+const CRYSTAL_Z = DATA.config.crystalZ;              // 2번 강화(얼음) z 위치
+
+// 공격속도 6단계 (발사 간격) / 다음 단계에 필요한 타격 수
+const FIRE_INTERVALS = DATA.config.fireIntervals;
+const HIT_TARGETS = DATA.config.hitTargets;
+const LEVEL_COLORS = [0x6b7480, 0x4fa3ff, 0x4fe0a0, 0xd8e04f, 0xff9a2a, 0xffd23a];
+
+// 적 종류 (인덱스 상수는 코드에 고정, 수치는 JSON)
+const E_NORMAL = 0, E_RUNNER = 1, E_TANK = 2, E_BOSS = 3;
+const ETYPE = DATA.enemyTypes;
+
+// 스테이지 목록. 게이트는 {op, val, x, z, w} 명시 배열 (전장 폭 FIELD_W*2 = 14 기준)
+const STAGES = DATA.stages;
 
 // ================= 렌더러 / 씬 =================
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -155,8 +278,6 @@ for (const sign of [-1, 1]) {
 const LANE_CRYSTAL_COLOR = 0x5b5a2e, LANE_ITEM_COLOR = 0x2e5a4a;
 
 // 전장과 옆 구역 사이 벽. 대포가 지나다닐 수 있게 대포 쪽(z >= WALL_END_Z)은 비워 둔다.
-const WALL_X = FIELD_W + LANE_GAP / 2;
-const WALL_END_Z = 6;
 {
   const len = WALL_END_Z - (SPAWN_Z - 4);
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x8a8f99 });
@@ -380,7 +501,7 @@ function buildGates(list) {
     g.mesh.material.dispose();
     g.mesh.geometry.dispose();
   }
-  gates = list.map(([op, val, x, z, w]) => {
+  gates = list.map(({ op, val, x, z, w }) => {
     const cw = Math.round(w * 64);
     const c = makeLabelCanvas(cw, 128);
     const ctx = c.getContext('2d');
@@ -406,7 +527,7 @@ const ICE_W = LANE_W;  // 얼음 가로 폭: 옆 구역을 꽉 채움 (대포 �
 const ICE_D = 2.6;     // 얼음 깊이(z)
 const ICE_H = 2.4;     // 얼음 높이
 const crystal = {
-  mesh: null, label: null, ctx: null, tex: null, x: -LANE_X, z: -5.5, hits: 0,
+  mesh: null, label: null, ctx: null, tex: null, x: -LANE_X, z: CRYSTAL_Z, hits: 0,
   ice: null, iceMat: null, cracks: [], cannon: null, hitFxT: 0,
 }; // 왼쪽 옆 구역
 {
@@ -559,7 +680,7 @@ function loadStage(idx) {
   sCount = 0; eCount = 0; soldierCapT = 0;
   hp = BASE_HP; stageTime = 0;
   score = 0; dragging = false; // 점수는 스테이지 시도마다 초기화
-  fireTimer = 0; spawnTimer = 0; itemTimer = 3; summonTimer = 0;
+  fireTimer = 0; spawnTimer = 0; itemTimer = ITEM_FIRST_DELAY; summonTimer = 0;
   cannonCount = 1; cannonX = 0; fireLevel = 0;
   bossSpawned = false; bossMaxHp = 0; bossAtk = 0;
   crystal.hits = 0;
@@ -882,7 +1003,7 @@ function update(dt) {
   // --- 대포 추가 아이템 ---
   if (st.items) {
     itemTimer -= dt;
-    if (itemTimer <= 0) { itemTimer = 8; spawnItem(); } // 테스트용: 자주 등장
+    if (itemTimer <= 0) { itemTimer = ITEM_INTERVAL; spawnItem(); } // 테스트용: 자주 등장
   }
   for (let k = items.length - 1; k >= 0; k--) {
     const it = items[k];
@@ -1229,5 +1350,10 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-loadStage(0);
+{
+  // ?stage=N (1부터)이 범위 안이면 그 스테이지로 시작한다 (에디터 플레이 테스트용). 없거나 범위 밖이면 1번
+  const sp = new URLSearchParams(location.search).get('stage');
+  const sn = sp !== null && /^\d+$/.test(sp) ? Number(sp) : 0;
+  loadStage(sn >= 1 && sn <= STAGES.length ? sn - 1 : 0);
+}
 requestAnimationFrame(loop);
