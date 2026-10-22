@@ -11,7 +11,7 @@ const BASE_Z = 8;           // 방어선
 const CANNON_Z = 9;
 const MAX_SOLDIERS = 10000;
 const MAX_ENEMIES = 1500;
-const SOLDIER_SPEED = 4;
+const SOLDIER_SPEED = 3;
 const SOLDIER_R = 0.3;
 const HOMING_R = 3.5;       // 유도 감지 반경
 const ENEMY_HOMING_R = 3;   // 적 유도 감지 반경
@@ -39,10 +39,11 @@ for (let n = 0; n <= MAX_CANNONS; n++) {
   CANNON_OFFSETS.push(list);
 }
 const WAVE_DUR = 14;        // 일반 웨이브 길이(초), 일반 3웨이브 + 보스 웨이브
+const SPAWN_MULT = 1;      // 적 생성량 배율 (성능 확인할 때만 올린다)
 const BASE_HP = 20;
 
 // 공격속도 6단계 (발사 간격) / 다음 단계에 필요한 타격 수
-const FIRE_INTERVALS = [0.25, 0.20, 0.16, 0.13, 0.10, 0.08];
+const FIRE_INTERVALS = [1.00, 0.82, 0.67, 0.55, 0.45, 0.35];
 const HIT_TARGETS = [20, 40, 70, 110, 160];
 const LEVEL_COLORS = [0x6b7480, 0x4fa3ff, 0x4fe0a0, 0xd8e04f, 0xff9a2a, 0xffd23a];
 
@@ -175,22 +176,52 @@ scene.add(baseLine);
 
 // ================= 대포 =================
 const cannonMeshes = [];
-for (let i = 0; i < MAX_CANNONS; i++) {
+const CANNON_GLOW_COLOR = 0x33ff66; // 대포 추가 발광 색(초록)
+const CANNON_GLOW_NEW = 1.2;        // 새 대포 발광 세기
+const CANNON_GLOW_OLD = 0.4;        // 기존 대포 발광 세기
+// 대포 모델 (본체 대포, 얼음 속 대포, 날아가는 대포가 공유). 지오메트리는 한 번만 만든다
+const cannonBarrelGeo = new THREE.CylinderGeometry(0.35, 0.5, 2, 12);
+const cannonWheelGeo = new THREE.CylinderGeometry(0.7, 0.7, 1.4, 16);
+function makeCannonModel(level) {
   const g = new THREE.Group();
-  const barrelMat = new THREE.MeshStandardMaterial({ color: LEVEL_COLORS[0] });
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2, 12), barrelMat);
+  const barrelMat = new THREE.MeshStandardMaterial({ color: LEVEL_COLORS[level] });
+  const barrel = new THREE.Mesh(cannonBarrelGeo, barrelMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.z = -0.8;
-  const wheel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.7, 0.7, 1.4, 16),
-    new THREE.MeshStandardMaterial({ color: 0x6b4a2b })
-  );
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2b });
+  const wheel = new THREE.Mesh(cannonWheelGeo, wheelMat);
   wheel.rotation.z = Math.PI / 2;
   g.add(barrel, wheel);
   g.position.y = 0.7;
+  return { group: g, barrel, barrelMat, wheelMat };
+}
+// 레벨에 맞는 색/포신 굵기 (본체 대포 render()와 같은 규칙)
+function setCannonLevel(m, level) {
+  m.barrelMat.color.setHex(LEVEL_COLORS[level]);
+  m.barrel.scale.set(1 + level * 0.1, 1, 1 + level * 0.1);
+}
+for (let i = 0; i < MAX_CANNONS; i++) {
+  const { group: g, barrel, barrelMat, wheelMat } = makeCannonModel(0);
   g.visible = false;
   scene.add(g);
-  cannonMeshes.push({ group: g, barrel, barrelMat });
+  // 대포 추가 발광: emissive만 쓰므로 공격속도 레벨 색(color)과 충돌하지 않는다. 평소 intensity 0 = 발광 없음
+  barrelMat.emissive.setHex(CANNON_GLOW_COLOR);
+  wheelMat.emissive.setHex(CANNON_GLOW_COLOR);
+  barrelMat.emissiveIntensity = 0;
+  wheelMat.emissiveIntensity = 0;
+  cannonMeshes.push({ group: g, barrel, barrelMat, wheelMat });
+}
+
+// 얼음에서 빠져나와 대포 대형으로 날아가는 대포 (풀 재사용, 연속 달성 대비 레벨 수만큼)
+const FLY_DUR = 0.6;       // 비행 시간(초)
+const FLY_ARC = 3;         // 포물선 높이
+const ICE_CANNON_SCALE = 0.6;
+const flyers = [];
+for (let i = 0; i < HIT_TARGETS.length; i++) {
+  const m = makeCannonModel(0);
+  m.group.visible = false;
+  scene.add(m.group);
+  flyers.push({ m, active: false, t: 0, level: 0, x0: 0, z0: 0 });
 }
 
 // ================= 인스턴스 메시 =================
@@ -213,6 +244,131 @@ function makeLabelCanvas(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   return c;
+}
+
+// ---- 파편 이펙트 (순수 시각용, 고정 크기 풀 재사용) ----
+const FX_MAX = 200;       // 동시 입자 상한 (가득 차면 새 입자는 무시)
+const FX_LIFE = 0.6;      // 입자 수명(초)
+const GATE_FADE = 0.2;    // 게이트가 사라지는 시간(초)
+const fxX = new Float32Array(FX_MAX);
+const fxY = new Float32Array(FX_MAX);
+const fxZ = new Float32Array(FX_MAX);
+const fxVx = new Float32Array(FX_MAX);
+const fxVy = new Float32Array(FX_MAX);
+const fxVz = new Float32Array(FX_MAX);
+const fxT = new Float32Array(FX_MAX); // 남은 수명
+const fxK = new Uint8Array(FX_MAX);   // 입자 색 종류 (FX_COLORS 인덱스)
+const FX_COLORS = [new THREE.Color(0x9fd0ff), new THREE.Color(0x4cff7a), new THREE.Color(0xffd23c), new THREE.Color(0xc8f0ff)]; // 0 게이트 파랑, 1 초록, 2 금색, 3 얼음 하늘색
+let fxCount = 0;
+const fxMesh = new THREE.InstancedMesh(
+  new THREE.BoxGeometry(0.22, 0.22, 0.22),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }), // 색은 인스턴스 색으로 입힌다
+  FX_MAX
+);
+fxMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+fxMesh.setColorAt(0, FX_COLORS[0]); // instanceColor 버퍼 생성
+fxMesh.frustumCulled = false;
+fxMesh.count = 0;
+scene.add(fxMesh);
+
+// 대포 추가 팝 (순수 시각용): 남은 시간, 새 대포는 마지막 인덱스
+const CANNON_POP_DUR = 0.35;
+let cannonPopT = 0;
+
+function fxClear() {
+  fxCount = 0;
+  fxMesh.count = 0;
+  cannonPopT = 0;
+  // 얼음 대포 연출 초기화: 날아가던 대포 제거, 표시 레벨을 실제 레벨에 맞춘다
+  for (const f of flyers) { f.active = false; f.m.group.visible = false; }
+  crystal.hitFxT = 0;
+  shownLevel = fireLevel;
+}
+// (x, z) 중심 반경 r 안에서 위로 퍼지는 입자 n개. 풀이 차면 남은 만큼만 만든다
+function fxBurst(x, z, r, n, kind) {
+  n = Math.min(FX_MAX - fxCount, n);
+  for (let k = 0; k < n; k++) {
+    const i = fxCount++;
+    fxX[i] = x + (Math.random() - 0.5) * 2 * r;
+    fxY[i] = 0.2 + Math.random() * 0.6;
+    fxZ[i] = z + (Math.random() - 0.5) * 2 * r;
+    fxVx[i] = (Math.random() - 0.5) * 2.5;
+    fxVy[i] = 2.5 + Math.random() * 3;
+    fxVz[i] = (Math.random() - 0.5) * 2.5;
+    fxT[i] = FX_LIFE * (0.6 + Math.random() * 0.4);
+    fxK[i] = kind;
+  }
+}
+// 게이트 폭 전체에서 파편을 흩뿌린다
+function fxGateBreak(g) {
+  const n = Math.min(FX_MAX - fxCount, 14 + Math.round(g.w * 3));
+  for (let k = 0; k < n; k++) {
+    const i = fxCount++;
+    fxX[i] = g.x + (Math.random() - 0.5) * g.w;
+    fxY[i] = 0.2 + Math.random() * 1.8;
+    fxZ[i] = g.z + (Math.random() - 0.5) * 0.3;
+    fxVx[i] = (Math.random() - 0.5) * 4;
+    fxVy[i] = 1.5 + Math.random() * 3;
+    fxVz[i] = (Math.random() - 0.5) * 3;
+    fxT[i] = FX_LIFE * (0.6 + Math.random() * 0.4);
+    fxK[i] = 0;
+  }
+}
+// 게임 상태와 무관하게 매 프레임 호출 (clear/over에서도 입자가 스스로 소멸)
+function fxUpdate(dt) {
+  for (const g of gates) {
+    if (g.fade > 0) {
+      g.fade -= dt;
+      if (g.fade <= 0) { g.fade = 0; g.mesh.visible = false; }
+      else g.mesh.material.opacity = g.fade / GATE_FADE;
+    }
+  }
+  for (let i = fxCount - 1; i >= 0; i--) {
+    fxT[i] -= dt;
+    if (fxT[i] <= 0) { // swap-remove
+      const l = --fxCount;
+      fxX[i] = fxX[l]; fxY[i] = fxY[l]; fxZ[i] = fxZ[l];
+      fxVx[i] = fxVx[l]; fxVy[i] = fxVy[l]; fxVz[i] = fxVz[l];
+      fxT[i] = fxT[l]; fxK[i] = fxK[l];
+      continue;
+    }
+    fxVy[i] -= 9 * dt;
+    fxX[i] += fxVx[i] * dt;
+    fxY[i] = Math.max(0.05, fxY[i] + fxVy[i] * dt);
+    fxZ[i] += fxVz[i] * dt;
+  }
+  for (let i = 0; i < fxCount; i++) {
+    dummy.position.set(fxX[i], fxY[i], fxZ[i]);
+    dummy.scale.setScalar(Math.min(1, fxT[i] / 0.25));
+    dummy.updateMatrix();
+    fxMesh.setMatrixAt(i, dummy.matrix);
+    fxMesh.setColorAt(i, FX_COLORS[fxK[i]]);
+  }
+  dummy.scale.setScalar(1);
+  fxMesh.count = fxCount;
+  fxMesh.instanceMatrix.needsUpdate = true;
+  fxMesh.instanceColor.needsUpdate = true;
+  if (cannonPopT > 0) cannonPopT = Math.max(0, cannonPopT - dt);
+  if (crystal.hitFxT > 0) crystal.hitFxT -= dt;
+
+  // 얼음에서 빠져나온 대포: 포물선으로 현재 대포 대형 중심까지 날아가고, 도착하면 대포 모습이 바뀐다
+  for (const f of flyers) {
+    if (!f.active) continue;
+    f.t += dt;
+    const u = Math.min(1, f.t / FLY_DUR);
+    const g = f.m.group;
+    g.position.x = f.x0 + (cannonX - f.x0) * u;
+    g.position.z = f.z0 + (CANNON_Z - f.z0) * u;
+    g.position.y = 0.9 + (0.7 - 0.9) * u + FLY_ARC * 4 * u * (1 - u);
+    g.scale.setScalar(ICE_CANNON_SCALE + (CANNON_SCALE - ICE_CANNON_SCALE) * u);
+    g.rotation.y = (1 - u) * Math.PI * 2;
+    if (u >= 1) {
+      f.active = false;
+      g.visible = false;
+      shownLevel = Math.max(shownLevel, f.level); // 순서가 뒤바뀌어도 높은 레벨로 수렴
+      fxBurst(cannonX, CANNON_Z, halfSpan() + 0.5, 16, 2);
+    }
+  }
 }
 
 // ---- 게이트 (파란 반투명 판, 고정) ----
@@ -239,20 +395,43 @@ function buildGates(list) {
     );
     mesh.position.set(x, 1, z);
     scene.add(mesh);
-    return { op, val, x, z, w, mesh, alive: true };
+    return { op, val, x, z, w, mesh, alive: true, fade: 0 };
   });
 }
 
 // ---- 타격 강화 크리스털 (노란 기둥, 고정) ----
-const crystal = { mesh: null, label: null, ctx: null, tex: null, x: -LANE_X, z: -5.5, hits: 0 }; // 왼쪽 옆 구역
+// 형태: 다음 단계 대포가 얼음에 갇힌 모습. mesh는 (얼음 + 균열 + 갇힌 대포) 그룹이라 회전/위치/표시를 한 번에 다룬다
+const ICE_CRACKS = 5;
+const crystal = {
+  mesh: null, label: null, ctx: null, tex: null, x: -LANE_X, z: -5.5, hits: 0,
+  ice: null, iceMat: null, cracks: [], cannon: null, hitFxT: 0,
+}; // 왼쪽 옆 구역
 {
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.55, 0.9, 2.4, 6),
-    new THREE.MeshStandardMaterial({ color: 0xffd23a, emissive: 0x805a00, flatShading: true })
-  );
-  mesh.position.set(crystal.x, 1.2, crystal.z);
+  const mesh = new THREE.Group();
+  mesh.position.set(crystal.x, 0, crystal.z);
   mesh.visible = false;
   scene.add(mesh);
+  const iceMat = new THREE.MeshStandardMaterial({
+    color: 0x9fe3ff, emissive: 0x2a6a8a, transparent: true, opacity: 0.75, depthWrite: false, flatShading: true,
+  });
+  const ice = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.2, 2.2), iceMat);
+  ice.position.y = 1.1; // 바닥에 닿는 정육면체
+  const cannon = makeCannonModel(1);
+  cannon.group.position.y = 0.9;
+  cannon.group.scale.setScalar(ICE_CANNON_SCALE);
+  const crackMat = new THREE.MeshBasicMaterial({ color: 0xf0ffff });
+  const crackGeo = new THREE.BoxGeometry(0.07, 0.9, 0.07);
+  for (let k = 0; k < ICE_CRACKS; k++) {
+    const a = k * 2.5; // 둘레에 흩어 놓는다
+    const cr = new THREE.Mesh(crackGeo, crackMat);
+    cr.position.set(Math.sin(a) * 1.0, 0.7 + (k % 3) * 0.45, Math.cos(a) * 1.0);
+    cr.rotation.set(0, a, (k % 2 ? 1 : -1) * (0.4 + 0.15 * k));
+    cr.visible = false;
+    mesh.add(cr);
+    crystal.cracks.push(cr);
+  }
+  mesh.add(cannon.group, ice);
+  crystal.ice = ice; crystal.iceMat = iceMat; crystal.cannon = cannon;
   const c = makeLabelCanvas(256, 96);
   crystal.ctx = c.getContext('2d');
   crystal.tex = new THREE.CanvasTexture(c);
@@ -272,6 +451,40 @@ function drawCrystalLabel() {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(fireLevel >= HIT_TARGETS.length ? 'MAX' : `${crystal.hits}/${HIT_TARGETS[fireLevel]}`, 128, 50);
   crystal.tex.needsUpdate = true;
+  refreshCrystalIce();
+}
+// 얼음 속 대포(다음 단계 모양)와 균열을 현재 진행도에 맞춘다. MAX면 얼음/대포를 숨긴다
+function refreshCrystalIce() {
+  const maxed = fireLevel >= HIT_TARGETS.length;
+  crystal.ice.visible = crystal.cannon.group.visible = !maxed;
+  if (maxed) {
+    for (const cr of crystal.cracks) cr.visible = false;
+    return;
+  }
+  setCannonLevel(crystal.cannon, fireLevel + 1);
+  const p = Math.min(1, crystal.hits / HIT_TARGETS[fireLevel]);
+  crystal.iceMat.opacity = 0.75 - 0.4 * p; // 갈수록 흐려져 안의 대포가 잘 보인다
+  const shown = Math.floor(p * ICE_CRACKS);
+  for (let k = 0; k < ICE_CRACKS; k++) crystal.cracks[k].visible = k < shown;
+}
+// 병사가 얼음을 칠 때 작은 조각 1개 (크리스털당 0.1초에 1회, 풀 여유 60 미만이면 생략)
+function crystalHitFx() {
+  if (crystal.hitFxT > 0 || FX_MAX - fxCount < 60) return;
+  crystal.hitFxT = 0.1;
+  fxBurst(crystal.x, crystal.z, 0.6, 1, 3);
+}
+// 얼음이 깨지는 순간: 파편을 크게 흩뿌리고, 갇혀 있던 대포(level 단계)를 대포 대형으로 날려 보낸다
+function crystalBreak(level) {
+  fxBurst(crystal.x, crystal.z, 0.9, 40, 3);
+  const f = flyers.find((v) => !v.active);
+  if (!f) { shownLevel = fireLevel; return; } // 풀 부족(발생 불가에 가까움): 즉시 반영
+  f.active = true; f.t = 0; f.level = level;
+  f.x0 = crystal.x; f.z0 = crystal.z;
+  setCannonLevel(f.m, level);
+  f.m.group.position.set(f.x0, 0.9, f.z0);
+  f.m.group.scale.setScalar(ICE_CANNON_SCALE);
+  f.m.group.rotation.y = 0;
+  f.m.group.visible = true;
 }
 
 // ---- 대포 추가 아이템 (초록 + 상자, 내려옴) ----
@@ -333,6 +546,7 @@ let stateAt = 0;
 let stageIdx = 0;
 let hp, score, stageTime, fireTimer, spawnTimer, itemTimer, summonTimer;
 let cannonCount, cannonX, fireLevel;
+let shownLevel = 0; // 대포 모습(색/포신 굵기)에 쓰는 표시용 레벨. 얼음 속 대포가 도착하면 fireLevel을 따라간다
 let bossSpawned, bossMaxHp, bossAtk;
 
 function loadStage(idx) {
@@ -352,6 +566,7 @@ function loadStage(idx) {
   crystal.mesh.visible = crystal.label.visible = st.crystal;
   drawCrystalLabel();
   buildGates(st.gates);
+  fxClear();
   clearItems();
   showOverlay(`STAGE ${idx + 1}`, st.desc, '클릭 또는 Enter로 시작 · 아래 번호로 스테이지 선택 · 대포를 잡고 드래그');
   state = 'ready'; stateAt = performance.now();
@@ -504,7 +719,7 @@ const cellZ = (z) => Math.floor((z - SPAWN_Z) / CELL) + 2;
 // ================= 웨이브 / 스폰 =================
 function spawnGroup(waveIdx, isBossWave) {
   const st = STAGES[stageIdx];
-  const n = isBossWave ? 2 + stageIdx : 3 + waveIdx * 2 + stageIdx;
+  const n = (isBossWave ? 2 + stageIdx : 3 + waveIdx * 2 + stageIdx) * SPAWN_MULT;
   const cx = (Math.random() * 2 - 1) * (FIELD_W - 2);
   for (let k = 0; k < n; k++) {
     const r = Math.random();
@@ -587,8 +802,12 @@ function update(dt) {
         cannonCount++;
         const lim = WORLD_HALF - halfSpan();
         cannonX = THREE.MathUtils.clamp(cannonX, -lim, lim);
+        cannonPopT = CANNON_POP_DUR;
+        fxBurst(it.x, it.z, ITEM_W / 2, 14, 1);
+        fxBurst(cannonX, CANNON_Z, halfSpan() + 0.5, 12, 1);
       } else {
         score += 50;
+        fxBurst(it.x, it.z, 1, 5, 2);
       }
     }
     if (touched || it.z > CANNON_Z + 3) {
@@ -656,7 +875,8 @@ function update(dt) {
       if (!g.alive) continue;
       if (Math.abs(ex[i] - g.x) < g.w / 2 + r * 0.5 && Math.abs(ez[i] - g.z) < 0.5 + r * 0.6) {
         g.alive = false;
-        g.mesh.visible = false;
+        g.fade = GATE_FADE; // 시각 연출: fxUpdate에서 서서히 숨김
+        fxGateBreak(g);
       }
     }
   }
@@ -762,6 +982,9 @@ function update(dt) {
         if (crystal.hits >= HIT_TARGETS[fireLevel]) {
           fireLevel++;
           crystal.hits = 0;
+          crystalBreak(fireLevel); // 시각 연출만 (게임 로직은 위에서 즉시 반영됨)
+        } else {
+          crystalHitFx();
         }
         continue;
       }
@@ -869,15 +1092,24 @@ function render() {
       const [dx, dz] = CANNON_OFFSETS[cannonCount][c];
       m.group.position.x = cannonX + dx;
       m.group.position.z = CANNON_Z + dz;
-      m.group.scale.setScalar(CANNON_SCALE);
-      tmpColor.setHex(LEVEL_COLORS[fireLevel]);
+      let pop = 1; // 대포 추가 팝 (scale만 곱함)
+      if (cannonPopT > 0) {
+        const s = Math.sin(Math.PI * (1 - cannonPopT / CANNON_POP_DUR));
+        pop = 1 + (c === cannonCount - 1 && cannonCount > 1 ? 0.45 : 0.12) * s;
+      }
+      m.group.scale.setScalar(CANNON_SCALE * pop);
+      tmpColor.setHex(LEVEL_COLORS[shownLevel]);
       m.barrelMat.color.copy(tmpColor);
-      m.barrel.scale.set(1 + fireLevel * 0.1, 1, 1 + fireLevel * 0.1);
+      m.barrel.scale.set(1 + shownLevel * 0.1, 1, 1 + shownLevel * 0.1);
+      // 대포 추가 발광: 팝과 같은 타이머로 번쩍였다가 사라진다 (끝나면 정확히 0으로 복원)
+      let glow = 0;
+      if (cannonPopT > 0 && cannonCount > 1) {
+        glow = (c === cannonCount - 1 ? CANNON_GLOW_NEW : CANNON_GLOW_OLD) * (cannonPopT / CANNON_POP_DUR);
+      }
+      m.barrelMat.emissiveIntensity = glow;
+      m.wheelMat.emissiveIntensity = glow;
     }
   }
-
-  // 크리스털 회전
-  crystal.mesh.rotation.y += 0.01;
 
   const wave = Math.min(3, Math.floor(stageTime / WAVE_DUR));
   hud.textContent =
@@ -892,6 +1124,7 @@ function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (state === 'play') update(dt);
+  fxUpdate(dt);
   render();
   requestAnimationFrame(loop);
 }
