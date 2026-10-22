@@ -3,15 +3,16 @@ import gameData from './data/game.json';
 import {
   FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
 } from './shared/world.js';
+import {
+  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, deriveWave, deriveWaves, deriveBossWave,
+} from './shared/gamedefaults.js';
 
 // ================= 설정 =================
 // 월드 치수 상수(FIELD_W, LANE_*, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_*)는 에디터와 공유한다
 const MAX_SOLDIERS = 10000;
 const MAX_ENEMIES = 1500;
 const SOLDIER_R = 0.3;
-const HOMING_R = 3.5;       // 유도 감지 반경
-const ENEMY_HOMING_R = 3;   // 적 유도 감지 반경
-const HOMING_SLOW = 0.6;    // 유도 중인 병사·적의 전진 속도 배율
+// 유도 반경(HOMING_R, ENEMY_HOMING_R)과 감속(HOMING_SLOW)은 config에서 읽는다 (아래 DATA 뒤에서 정의)
 const MAX_CANNONS = 7;
 const CANNON_SCALE = 0.8;   // 대포 모델 크기 (밀집 배치용)
 const CANNON_SPACING = 1.15; // 인접 대포 사이 거리
@@ -77,6 +78,56 @@ const DEFAULT_STAGE = {
 };
 const MAX_ESCORT = 8; // 호위병 상한 (ENEMY_RESERVE 슬롯 안에 들어가도록)
 
+// ---- 웨이브 검증 (범위는 shared/gamedefaults.js의 WAVE_LIMITS, 에디터 schema.js와 같다) ----
+function waveInt(v, def, [min, max], path) {
+  if (typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max) return v;
+  warn(`${path}: ${min}~${max}의 정수가 아니라 기본값 ${def} 사용`);
+  return def;
+}
+// runner/tank 비율은 선택값: 없으면 스테이지 값을 쓰고, 범위 밖이면 경고 후 생략(= 스테이지 값)
+function waveRatio(v, path) {
+  const [min, max] = WAVE_LIMITS.ratio;
+  if (v === undefined) return undefined;
+  if (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max) return v;
+  warn(`${path}: 범위(${min}~${max})를 벗어나 스테이지 값 사용`);
+  return undefined;
+}
+function sanitizeWaveRatios(w, out, path) {
+  const runner = waveRatio(w.runner, `${path}.runner`);
+  const tank = waveRatio(w.tank, `${path}.tank`);
+  if (runner !== undefined) out.runner = runner;
+  if (tank !== undefined) out.tank = tank;
+  return out;
+}
+function sanitizeWaves(raw, p, stageIdx, waveDur) {
+  if (raw === undefined) return deriveWaves(stageIdx, waveDur);
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_WAVES) {
+    warn(`${p}.waves: 길이 1~${MAX_WAVES}의 배열이 아니라 기본 웨이브 사용`);
+    return deriveWaves(stageIdx, waveDur);
+  }
+  return raw.map((w0, k) => {
+    const wp = `${p}.waves[${k}]`;
+    const def = deriveWave(k, stageIdx, waveDur);
+    if (!isObj(w0)) warn(`${wp}: 객체가 아니라 기본값 사용`);
+    const w = isObj(w0) ? w0 : {};
+    return sanitizeWaveRatios(w, {
+      duration: num(w.duration, def.duration, ...WAVE_LIMITS.duration, `${wp}.duration`),
+      interval: num(w.interval, def.interval, ...WAVE_LIMITS.interval, `${wp}.interval`),
+      count: waveInt(w.count, def.count, WAVE_LIMITS.count, `${wp}.count`),
+    }, wp);
+  });
+}
+function sanitizeBossWave(raw, p, stageIdx) {
+  const def = deriveBossWave(stageIdx);
+  if (raw === undefined) return def;
+  const wp = `${p}.bossWave`;
+  if (!isObj(raw)) { warn(`${wp}: 객체가 아니라 기본값 사용`); return def; }
+  return sanitizeWaveRatios(raw, {
+    interval: num(raw.interval, def.interval, ...WAVE_LIMITS.interval, `${wp}.interval`),
+    count: waveInt(raw.count, def.count, WAVE_LIMITS.count, `${wp}.count`),
+  }, wp);
+}
+
 function sanitizeData(raw) {
   const d = isObj(raw) ? raw : {};
   if (!isObj(raw)) warn('최상위가 객체가 아니라 전부 기본값 사용');
@@ -94,6 +145,13 @@ function sanitizeData(raw) {
     itemFirstDelay: num(c.itemFirstDelay, D.itemFirstDelay, 0, 600, 'config.itemFirstDelay'),
     crystalZ: num(c.crystalZ, D.crystalZ, SPAWN_Z, BASE_Z, 'config.crystalZ'),
   };
+  // 선택 수치: game.json에 없으면 조용히 기본값(예전 코드 값), 있는데 범위 밖이면 경고 후 기본값.
+  // 반경 상한 4는 격자 5x5 셀 탐색이 놓치지 않는 한계다 (근거: shared/gamedefaults.js)
+  for (const key of ['homingR', 'enemyHomingR', 'homingSlow']) {
+    config[key] = c[key] === undefined
+      ? HOMING_DEFAULTS[key]
+      : num(c[key], HOMING_DEFAULTS[key], HOMING_LIMITS[key][0], HOMING_LIMITS[key][1], `config.${key}`);
+  }
 
   const enemyTypes = DEFAULT_ETYPES.map((def, i) => {
     const p = `enemyTypes[${i}]`;
@@ -159,6 +217,8 @@ function sanitizeData(raw) {
     // 선택 필드: 있을 때만 검증해서 넣는다 (escort = 호위병 수, summon = 소환 간격 초)
     if (b.escort !== undefined) boss.escort = Math.floor(num(b.escort, 0, 0, MAX_ESCORT, `${p}.boss.escort`));
     if (b.summon !== undefined) boss.summon = num(b.summon, 4, 0.5, 600, `${p}.boss.summon`);
+    const runner = num(s.runner, 0, 0, 1, `${p}.runner`);
+    const tank = num(s.tank, 0, 0, 1, `${p}.tank`);
     return {
       desc: str(s.desc, '', `${p}.desc`),
       gates,
@@ -166,9 +226,12 @@ function sanitizeData(raw) {
       items: bool(s.items, true, `${p}.items`),
       crystalSide: side(s.crystalSide, -1, `${p}.crystalSide`),
       itemSide: side(s.itemSide, 1, `${p}.itemSide`),
-      runner: num(s.runner, 0, 0, 1, `${p}.runner`),
-      tank: num(s.tank, 0, 0, 1, `${p}.tank`),
+      runner,
+      tank,
       boss,
+      // waves / bossWave가 없으면 예전 고정 공식과 같은 값으로 채운다 (웨이브 k: 개수 3+2k+stageIdx, 간격 1초, 길이 waveDur)
+      waves: sanitizeWaves(s.waves, p, i, config.waveDur),
+      bossWave: sanitizeBossWave(s.bossWave, p, i),
     };
   });
   return { config, enemyTypes, stages };
@@ -206,7 +269,10 @@ if (usingDraft) {
   document.body.appendChild(badge);
 }
 const SOLDIER_SPEED = DATA.config.soldierSpeed;
-const WAVE_DUR = DATA.config.waveDur;        // 일반 웨이브 길이(초), 일반 3웨이브 + 보스 웨이브
+// 웨이브 길이·간격·개수는 스테이지의 waves / bossWave에서 읽는다 (없으면 sanitizeData가 예전 공식으로 채움, config.waveDur는 그 기본 길이)
+const HOMING_R = DATA.config.homingR;           // 병사 유도 감지 반경
+const ENEMY_HOMING_R = DATA.config.enemyHomingR; // 적 유도 감지 반경
+const HOMING_SLOW = DATA.config.homingSlow;     // 유도 중인 병사·적의 전진 속도 배율
 const SPAWN_MULT = 1;      // 적 생성량 배율 (성능 확인할 때만 올린다)
 const BASE_HP = DATA.config.baseHp;
 const ITEM_INTERVAL = DATA.config.itemInterval;      // 대포 추가 벽 생성 간격(초)
@@ -937,15 +1003,27 @@ function separateSoldiers() {
 }
 
 // ================= 웨이브 / 스폰 =================
+// 현재 시간의 웨이브 번호: 누적 duration으로 결정. waves.length이면 보스 웨이브(보스 처치까지 계속)
+function waveIndexAt(st, t) {
+  let end = 0;
+  for (let k = 0; k < st.waves.length; k++) {
+    end += st.waves[k].duration;
+    if (t < end) return k;
+  }
+  return st.waves.length;
+}
 function spawnGroup(waveIdx, isBossWave) {
   const st = STAGES[stageIdx];
-  const n = (isBossWave ? 2 + stageIdx : 3 + waveIdx * 2 + stageIdx) * SPAWN_MULT;
+  const wave = isBossWave ? st.bossWave : st.waves[waveIdx];
+  const n = wave.count * SPAWN_MULT;
+  const runnerR = wave.runner ?? st.runner; // 웨이브 값이 없으면 스테이지 값
+  const tankR = wave.tank ?? st.tank;
   const cx = (Math.random() * 2 - 1) * (FIELD_W - 2);
   for (let k = 0; k < n; k++) {
     const r = Math.random();
     let type = E_NORMAL;
-    if (r < st.tank) type = E_TANK;
-    else if (r < st.tank + st.runner) type = E_RUNNER;
+    if (r < tankR) type = E_TANK;
+    else if (r < tankR + runnerR) type = E_RUNNER;
     addEnemy(cx + (Math.random() - 0.5) * 3.5, type, SPAWN_Z - Math.random() * 1.5);
   }
 }
@@ -964,8 +1042,8 @@ function spawnBoss() {
 function update(dt) {
   stageTime += dt;
   const st = STAGES[stageIdx];
-  const waveIdx = Math.min(3, Math.floor(stageTime / WAVE_DUR));
-  const bossWave = waveIdx === 3;
+  const waveIdx = waveIndexAt(st, stageTime);
+  const bossWave = waveIdx >= st.waves.length;
   const baseSpeed = 1.0 + stageIdx * 0.06;
 
   // --- 대포 발사 ---
@@ -983,7 +1061,7 @@ function update(dt) {
   if (bossWave && !bossSpawned) spawnBoss();
   spawnTimer -= dt;
   if (spawnTimer <= 0) {
-    spawnTimer = 1.0;
+    spawnTimer = bossWave ? st.bossWave.interval : st.waves[waveIdx].interval;
     spawnGroup(waveIdx, bossWave);
   }
   // 소환사 보스
@@ -1332,9 +1410,10 @@ function render() {
     }
   }
 
-  const wave = Math.min(3, Math.floor(stageTime / WAVE_DUR));
+  const waveCount = STAGES[stageIdx].waves.length;
+  const wave = waveIndexAt(STAGES[stageIdx], stageTime);
   hud.textContent =
-    `STAGE ${stageIdx + 1}/${STAGES.length}  ${wave >= 3 ? 'BOSS' : `웨이브 ${wave + 1}/3`}   HP ${hp}   점수 ${score}\n` +
+    `STAGE ${stageIdx + 1}/${STAGES.length}  ${wave >= waveCount ? 'BOSS' : `웨이브 ${wave + 1}/${waveCount}`}   HP ${hp}   점수 ${score}\n` +
     `병사 ${sCount}${sCount >= MAX_SOLDIERS || soldierCapT > 0 ? ' MAX' : ''}   대포 ${cannonCount}   공격속도 Lv${fireLevel}`;
   hud.style.whiteSpace = 'pre-line';
   renderer.render(scene, camera);

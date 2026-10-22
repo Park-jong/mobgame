@@ -1,7 +1,9 @@
 // 필드 정의 공통 로직 (DOM 없음). 필드 정의 형식:
 //   { name, label, type: 'number'|'select'|'text'|'color'|'checkbox'|'numlist'|'note',
 //     min, max, step, int, options:[{value,label}], multiline, length(numlist), help,
-//     get(obj), set(obj, v), check(v, obj) -> 오류 문자열|null, text(obj, ctx) (note 전용) }
+//     optional(number 전용: undefined 허용), get(obj), set(obj, v), check(v, obj) -> 오류 문자열|null, text(obj, ctx) (note 전용) }
+// 리스트 폼 정의 (행 목록, 예: 웨이브): { name, label, min, max, itemFields:[필드 정의], itemLabel(i), addLabel }
+//   validateList가 길이(min~max)와 행마다 itemFields를 검사하고, panels.js의 buildListForm이 행 입력·삭제·추가 UI를 만든다.
 // 값이 범위를 벗어나도 편집 데이터에는 그대로 저장하고, checkField가 오류를 알려 준다(빨간 테두리·저장 차단).
 
 export const getValue = (f, obj) => (f.get ? f.get(obj) : obj[f.name]);
@@ -13,6 +15,7 @@ export function setValue(f, obj, v) {
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
 function checkNumber(f, v) {
+  if (f.optional && v === undefined) return null;
   if (!isNum(v)) return '숫자를 입력하세요';
   if (f.int && !Number.isInteger(v)) return '정수여야 합니다';
   if (f.min !== undefined && v < f.min) return `${f.min} 이상이어야 합니다`;
@@ -44,6 +47,22 @@ export function checkField(f, v, obj) {
   }
   if (!msg && f.check) msg = f.check(v, obj) || null;
   return msg;
+}
+
+// 리스트 폼 검사: 항목 배열 전체. [{ path, msg }]
+export function validateList(def, items, path) {
+  if (!Array.isArray(items)) return [{ path, msg: `${def.label}: 배열이어야 합니다` }];
+  const out = [];
+  if (items.length < def.min || items.length > def.max) out.push({ path, msg: `${def.label}: ${def.min}~${def.max}개여야 합니다 (현재 ${items.length}개)` });
+  items.forEach((it, i) => {
+    const ip = `${path}[${i}]`;
+    if (it === null || typeof it !== 'object' || Array.isArray(it)) {
+      out.push({ path: ip, msg: `${def.itemLabel(i)}: 객체여야 합니다` });
+      return;
+    }
+    for (const m of validateFields(def.itemFields, it, ip)) out.push({ path: m.path, msg: `${def.itemLabel(i)} ${m.msg}` });
+  });
+  return out;
 }
 
 // 필드 목록 전체를 검사해 [{ path, msg }]로 돌려준다

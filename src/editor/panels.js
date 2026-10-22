@@ -1,8 +1,11 @@
 // 속성 패널 / 스테이지 탭 / 툴바: 전부 필드 정의 배열과 오브젝트 타입 레지스트리에서 자동 생성한다.
 // 오브젝트 종류는 모른다 (getTypes()를 순회).
 import { getTypes, getType } from './objectTypes.js';
-import { listOf, canAdd, checkField, getValue, MAX_STAGES, isLocked, isBaseStage, isBaseUnlocked, canMoveStage } from './model.js';
-import { STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES } from './schema.js';
+import {
+  listOf, canAdd, checkField, getValue, MAX_STAGES, isLocked, isBaseStage, isBaseUnlocked, canMoveStage,
+  effectiveWaves, effectiveBossWave, waveSummary,
+} from './model.js';
+import { STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES, BOSSWAVE_FIELDS, WAVE_LIST } from './schema.js';
 
 const h = (tag, props = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -137,12 +140,62 @@ export function buildTable(fields, getRows, rowNames, opts) {
   });
   el.append(body);
   const sync = () => {
+    const ro = !!(opts.readOnly && opts.readOnly());
     getRows().forEach((row, ri) => fields.forEach((f, fi) => {
       const w = grid[ri][fi];
+      w.setDisabled(ro);
       const v = getValue(f, row);
       if (!w.contains(document.activeElement)) w.set(v);
       w.mark(checkField(f, v, row));
     }));
+  };
+  sync();
+  return { el, sync };
+}
+
+/**
+ * 리스트 폼 자동 생성 (행 목록: 행마다 itemFields 입력 + 삭제 버튼, 아래에 추가 버튼). 정의 형식은 fields.js 맨 위 주석.
+ *  getItems(): 현재 행 배열 / opts.onInput(ri, field, v), opts.onAdd(), opts.onRemove(ri), opts.readOnly()
+ * 행 개수가 바뀌면 호출한 쪽이 폼을 다시 만들어야 한다(행은 만들 때의 개수로 고정). 반환 { el, sync }
+ */
+export function buildListForm(def, getItems, opts) {
+  const el = h('div', { class: 'listform' });
+  const table = h('table', { class: 'etable' });
+  table.append(h('thead', {}, h('tr', {}, h('th'), ...def.itemFields.map((f) => h('th', { text: f.label })), h('th'))));
+  const body = h('tbody');
+  const rows = getItems().map((_, ri) => {
+    const tr = h('tr', {}, h('th', { text: def.itemLabel(ri) }));
+    const ws = def.itemFields.map((f) => {
+      const w = makeInput(f, (v) => opts.onInput(ri, f, v));
+      tr.append(h('td', {}, w.el));
+      return w;
+    });
+    const del = h('button', { text: '삭제', title: '이 행 삭제', onclick: () => opts.onRemove(ri) });
+    tr.append(h('td', {}, del));
+    body.append(tr);
+    return { ws, del };
+  });
+  table.append(body);
+  const addBtn = h('button', { text: def.addLabel || '추가', onclick: () => opts.onAdd() });
+  el.append(h('div', { class: 'tablewrap' }, table), h('div', { class: 'btnbar' }, addBtn));
+  const sync = () => {
+    const items = getItems();
+    const ro = !!(opts.readOnly && opts.readOnly());
+    rows.forEach((r, ri) => {
+      const item = items[ri];
+      if (!item) return;
+      def.itemFields.forEach((f, fi) => {
+        const w = r.ws[fi];
+        w.setDisabled(ro);
+        const v = getValue(f, item);
+        if (!w.contains(document.activeElement)) w.set(v);
+        w.mark(checkField(f, v, item));
+      });
+      r.del.disabled = ro || items.length <= def.min;
+      r.del.title = ro ? '읽기 전용' : items.length <= def.min ? `최소 ${def.min}개는 있어야 합니다` : '이 행 삭제';
+    });
+    addBtn.disabled = ro || items.length >= def.max;
+    addBtn.title = ro ? '읽기 전용' : items.length >= def.max ? `최대 ${def.max}개까지 추가할 수 있습니다` : '';
   };
   sync();
   return { el, sync };
@@ -209,15 +262,16 @@ export function createPanels(els, app) {
           h('button', { text: '다시 잠그기', onclick: () => app.relockBase() }),
           h('button', {
             text: '원본으로 복원', disabled: canRestore && isBaseStage(cur) ? null : '',
-            title: !canRestore ? '백업을 읽지 못해 복원할 수 없습니다' : isBaseStage(cur) ? '현재 스테이지를 백업 원본으로 되돌립니다 (undo 가능)' : '기본 스테이지(1~5)를 선택하세요',
+            title: !canRestore ? `복원할 수 없습니다: ${app.backupReason()}` : isBaseStage(cur) ? '현재 스테이지를 백업 원본으로 되돌립니다 (undo 가능)' : '기본 스테이지(1~5)를 선택하세요',
             onclick: () => app.restoreBase(false),
           }),
           h('button', {
             text: '1~5 모두 복원', disabled: canRestore ? null : '',
-            title: canRestore ? '기본 스테이지 1~5를 모두 백업 원본으로 되돌립니다 (undo 가능)' : '백업을 읽지 못해 복원할 수 없습니다',
+            title: canRestore ? '기본 스테이지 1~5를 모두 백업 원본으로 되돌립니다 (undo 가능)' : `복원할 수 없습니다: ${app.backupReason()}`,
             onclick: () => app.restoreBase(true),
           })),
-        h('div', { class: 'hint', text: '복원 후 저장해야 game.json에 반영됩니다. 삭제와 순서 이동은 계속 막혀 있습니다.' })));
+        h('div', { class: 'hint', text: '복원 후 저장해야 game.json에 반영됩니다. 삭제와 순서 이동은 계속 막혀 있습니다.' }),
+        canRestore ? null : h('div', { class: 'hint wrn', text: `백업을 쓸 수 없어 복원이 비활성입니다 (${app.backupReason()})` })));
     }
     if (n > 5) box.append(h('div', { class: 'warnbox', text: '스테이지가 6개 이상입니다. 게임의 숫자 키 선택(1~5)은 일부만 지원합니다 (화면의 번호 버튼은 모두 동작).' }));
   }
@@ -285,6 +339,47 @@ export function createPanels(els, app) {
     });
     forms.push(bf);
     box.append(bf.el, h('div', { class: 'hint', text: '보스 스폰 위치(x=0, z=SPAWN_Z-1)는 코드 고정이라 편집할 수 없습니다.' }));
+    renderWaves(box);
+  }
+
+  // 웨이브 섹션: 일반 웨이브 리스트 + 보스 웨이브 행 + 요약. waves/bossWave가 없으면 파생 기본값이 보이고, 편집하면 그때 데이터에 채워진다
+  function renderWaves(box) {
+    const data = () => app.getData();
+    const si = () => app.getStageIdx();
+    box.append(h('h4', {}, '웨이브 ', h('span', { class: 'tag', text: '러너/탱커를 비우면 스테이지 비율' })));
+    const wl = buildListForm(WAVE_LIST, () => effectiveWaves(data(), si()), {
+      readOnly: locked,
+      onInput: (ri, field, v) => edit(() => app.setWaveField(ri, field, v)),
+      onAdd: () => app.addWave(),
+      onRemove: (ri) => app.removeWave(ri),
+    });
+    forms.push(wl);
+    box.append(wl.el, h('h4', { text: '보스 웨이브 (보스 처치까지 계속)' }));
+    const bw = buildTable(BOSSWAVE_FIELDS, () => [effectiveBossWave(data(), si())], ['보스 웨이브'], {
+      readOnly: locked,
+      onInput: (ri, field, v) => edit(() => app.setBossWaveField(field, v)),
+    });
+    forms.push(bw);
+    const sum = h('div', { class: 'hint' });
+    const summary = {
+      sync: () => {
+        const s = waveSummary(data(), si());
+        const rate = (r) => (Math.round(r * 100) / 100).toString();
+        sum.textContent = `일반 웨이브 총 ${s.totalSec}초, 예상 생성 적 수 ${s.totalEnemies}마리 (보스 웨이브 제외)\n`
+          + `초당 생성 수: ${s.perWave.map((w, k) => `웨이브 ${k + 1} ${rate(w.rate)}`).join(' / ')} / 보스 웨이브 ${rate(s.bossRate)}`;
+        sum.style.whiteSpace = 'pre-line';
+      },
+    };
+    summary.sync();
+    forms.push(summary);
+    box.append(h('div', { class: 'tablewrap' }, bw.el), sum, h('div', { class: 'btnbar' }, h('button', {
+      text: '웨이브 기본값으로', disabled: locked() ? '' : null,
+      title: locked() ? '기본 스테이지는 읽기 전용입니다' : '이 스테이지의 waves / bossWave를 지우고 기본 공식으로 되돌립니다 (되돌리기 가능)',
+      onclick: () => app.resetWaves(),
+    })), h('div', {
+      class: 'hint',
+      text: '필드가 없는 스테이지는 기본 공식(웨이브 3개, 길이=전역 웨이브 길이, 간격 1초, 수 3+2k+스테이지 번호-1, 보스 웨이브 수 2+스테이지 번호-1)으로 동작합니다. 기본값과 같으면 저장 시 필드를 쓰지 않습니다.',
+    }));
   }
 
   function renderConfig() {

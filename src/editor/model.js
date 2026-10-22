@@ -1,10 +1,12 @@
 // 에디터 데이터 로직 (DOM 없음, Node에서 테스트 가능). 오브젝트 종류는 모르고 objectTypes 레지스트리를 순회한다.
 // 모든 편집 함수는 전달받은 data를 제자리에서 바꾸며, 모르는 키는 건드리지 않아 저장 시 그대로 보존된다.
 import { getTypes, getType } from './objectTypes.js';
-import { checkField, validateFields, getValue, setValue } from './fields.js';
+import { checkField, validateFields, validateList, getValue, setValue } from './fields.js';
 import {
   MAX_STAGES, LOCKED_STAGE_COUNT, ETYPE_COUNT, STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES,
+  BOSSWAVE_FIELDS, WAVE_LIST,
 } from './schema.js';
+import { MAX_WAVES, deriveWave, deriveWaves, deriveBossWave } from '../shared/gamedefaults.js';
 
 export { MAX_STAGES, LOCKED_STAGE_COUNT };
 
@@ -152,6 +154,104 @@ export function setBossField(data, si, field, value) {
   return true;
 }
 
+// ---------- 웨이브 ----------
+// stage.waves / stage.bossWave가 없으면 파생 기본값(예전 고정 공식)이 "있는 것처럼" 보인다. 데이터에는 처음 편집할 때까지 쓰지 않는다
+// (lazy 채움: 사용자가 바꾸기 전에는 game.json 스테이지가 그대로). 저장 시 기본값과 같고 원래 파일에도 없으면 다시 생략한다(prepareForSave).
+const waveDurOf = (data) => (typeof data?.config?.waveDur === 'number' && Number.isFinite(data.config.waveDur) ? data.config.waveDur : 14);
+export const effectiveWaves = (data, si) => {
+  const s = data.stages[si];
+  return Array.isArray(s?.waves) ? s.waves : deriveWaves(si, waveDurOf(data));
+};
+export const effectiveBossWave = (data, si) => {
+  const s = data.stages[si];
+  return isObj(s?.bossWave) ? s.bossWave : deriveBossWave(si);
+};
+// 편집 직전에 파생값을 데이터에 채운다
+function materializeWaves(data, si) {
+  const s = data.stages[si];
+  if (!Array.isArray(s.waves)) s.waves = deriveWaves(si, waveDurOf(data));
+  return s.waves;
+}
+function materializeBossWave(data, si) {
+  const s = data.stages[si];
+  if (!isObj(s.bossWave)) s.bossWave = deriveBossWave(si);
+  return s.bossWave;
+}
+// 반환 false = 거부 (잠금, 범위 밖 번호)
+export function setWaveField(data, si, k, field, value) {
+  const s = data.stages[si];
+  if (isLocked(si) || !isObj(s) || !isObj(effectiveWaves(data, si)[k])) return false;
+  setValue(field, materializeWaves(data, si)[k], value);
+  return true;
+}
+export function setBossWaveField(data, si, field, value) {
+  if (isLocked(si) || !isObj(data.stages[si])) return false;
+  setValue(field, materializeBossWave(data, si), value);
+  return true;
+}
+// 맨 뒤에 웨이브 추가 (파생 공식의 다음 번호 값). 반환: 새 인덱스 또는 -1 (잠금/최대)
+export function addWave(data, si) {
+  if (isLocked(si) || !isObj(data.stages[si]) || effectiveWaves(data, si).length >= MAX_WAVES) return -1;
+  const waves = materializeWaves(data, si);
+  waves.push(deriveWave(waves.length, si, waveDurOf(data)));
+  return waves.length - 1;
+}
+// 웨이브 삭제 (최소 1개 유지). 반환: 성공 여부
+export function removeWave(data, si, k) {
+  if (isLocked(si) || !isObj(data.stages[si])) return false;
+  const cur = effectiveWaves(data, si);
+  if (cur.length <= WAVE_LIST.min || k < 0 || k >= cur.length) return false;
+  materializeWaves(data, si).splice(k, 1);
+  return true;
+}
+// 웨이브/보스 웨이브를 파생 기본값으로 되돌린다(필드 삭제). 반환: 바뀐 것이 있으면 true
+export function resetWaves(data, si) {
+  const s = data.stages[si];
+  if (isLocked(si) || !isObj(s) || (s.waves === undefined && s.bossWave === undefined)) return false;
+  delete s.waves;
+  delete s.bossWave;
+  return true;
+}
+// 요약: 일반 웨이브 총 시간, 예상 생성 적 수(보스 웨이브 제외), 웨이브별 초당 생성 수
+// 생성은 간격마다 한 번씩(웨이브 시작 시점 포함)이라 웨이브당 횟수는 ceil(길이/간격)로 본다 (타이머가 웨이브 경계를 넘나들어 ±1회 오차 가능)
+const fin = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+export function waveSummary(data, si) {
+  const perWave = effectiveWaves(data, si).map((w) => {
+    const dur = fin(w?.duration), iv = fin(w?.interval), cnt = fin(w?.count);
+    const spawns = iv > 0 ? Math.ceil(dur / iv - 1e-9) : 0;
+    return { rate: iv > 0 ? cnt / iv : 0, enemies: spawns * cnt, duration: dur };
+  });
+  const b = effectiveBossWave(data, si);
+  return {
+    totalSec: perWave.reduce((a, w) => a + w.duration, 0),
+    totalEnemies: perWave.reduce((a, w) => a + w.enemies, 0),
+    perWave,
+    bossRate: fin(b?.interval) > 0 ? fin(b?.count) / fin(b.interval) : 0,
+  };
+}
+// 파생 기본값과 같은 waves/bossWave를 제거한 사본 (기본 스테이지 변경 감지·불러오기 비교용)
+export function canonicalStage(stage, si, config) {
+  if (!isObj(stage)) return stage;
+  const c = clone(stage);
+  const wd = waveDurOf({ config });
+  if (Array.isArray(c.waves) && deepEqual(c.waves, deriveWaves(si, wd))) delete c.waves;
+  if (isObj(c.bossWave) && deepEqual(c.bossWave, deriveBossWave(si))) delete c.bossWave;
+  return c;
+}
+// 저장/내려받기용 사본: waves/bossWave가 파생 기본값과 같고 저장된 파일(saved)에도 없던 스테이지는 필드를 쓰지 않는다.
+// 바뀌었거나 원래 파일에 있었으면 명시적으로 쓴다
+export function prepareForSave(data, saved) {
+  const out = clone(data);
+  const wd = waveDurOf(data);
+  out.stages?.forEach?.((s, i) => {
+    if (!isObj(s)) return;
+    const was = saved?.stages?.[i];
+    if (Array.isArray(s.waves) && deepEqual(s.waves, deriveWaves(i, wd)) && !Array.isArray(was?.waves)) delete s.waves;
+    if (isObj(s.bossWave) && deepEqual(s.bossWave, deriveBossWave(i)) && !isObj(was?.bossWave)) delete s.bossWave;
+  });
+  return out;
+}
+
 // ---------- 원본 복원 (백업 = { createdAt, stages:[5개] }) ----------
 const backupOk = (backup) => isObj(backup) && Array.isArray(backup.stages) && backup.stages.length >= LOCKED_STAGE_COUNT;
 // 기본 스테이지 하나를 백업의 같은 번호로 되돌린다. 잠금 해제 상태에서만. 반환: 성공 여부
@@ -169,7 +269,10 @@ export function restoreAllStages(data, backup) {
 // 기본 스테이지 중 base와 달라진 번호(0부터) 목록
 export function changedBaseStages(data, base) {
   const out = [];
-  for (let i = 0; i < LOCKED_STAGE_COUNT; i++) if (!deepEqual(data.stages?.[i], base.stages?.[i])) out.push(i);
+  // waves/bossWave가 파생 기본값과 같으면 없는 것과 같게 본다 (명시 여부만 다른 경우는 변경이 아님)
+  for (let i = 0; i < LOCKED_STAGE_COUNT; i++) {
+    if (!deepEqual(canonicalStage(data.stages?.[i], i, data.config), canonicalStage(base.stages?.[i], i, base.config))) out.push(i);
+  }
   return out;
 }
 
@@ -186,7 +289,7 @@ export function lockedStagesMatch(current, incoming) {
   if (LOCKED_STAGE_COUNT === 0 || baseUnlocked) return true; // 잠금 해제 중에는 1~5가 달라도 허용
   if (!incoming || !Array.isArray(incoming.stages)) return false;
   for (let i = 0; i < LOCKED_STAGE_COUNT; i++) {
-    if (!deepEqual(current.stages[i], incoming.stages[i])) return false;
+    if (!deepEqual(canonicalStage(current.stages[i], i, current.config), canonicalStage(incoming.stages[i], i, incoming.config))) return false;
   }
   return true;
 }
@@ -223,6 +326,12 @@ export function validate(data) {
     add(validateFields(STAGE_FIELDS, s, p));
     if (isObj(s.boss)) add(validateFields(BOSS_FIELDS, s.boss, `${p}.boss`).map((x) => ({ ...x, msg: `보스 ${x.msg}` })));
     else errs.push({ path: `${p}.boss`, msg: `${n}: boss는 객체여야 합니다` });
+    // 웨이브 (없으면 파생 기본값이라 검사하지 않음)
+    if (s.waves !== undefined) add(validateList(WAVE_LIST, s.waves, `${p}.waves`));
+    if (s.bossWave !== undefined) {
+      if (isObj(s.bossWave)) add(validateFields(BOSSWAVE_FIELDS, s.bossWave, `${p}.bossWave`).map((x) => ({ ...x, msg: `보스 웨이브 ${x.msg}` })));
+      else errs.push({ path: `${p}.bossWave`, msg: `${n}: bossWave는 객체여야 합니다` });
+    }
 
     for (const type of getTypes()) {
       const { kind, key } = type.storage;
@@ -246,6 +355,7 @@ export function validate(data) {
   return errs;
 }
 
+export const WAVE_RATE_WARN = 100; // 초당 생성 수(count/interval) 경고 기준
 // 경고(저장 가능): [{ path, msg }]
 export function warnings(data) {
   const out = [];
@@ -256,6 +366,19 @@ export function warnings(data) {
     const n = `스테이지 ${i + 1}`;
     if (typeof s.runner === 'number' && typeof s.tank === 'number' && s.runner + s.tank > 1 + 1e-9) {
       out.push({ path: `stages[${i}]`, msg: `${n}: 러너+탱커 비율 합이 1을 넘습니다 (탱커가 먼저 배정됨)` });
+    }
+    // 웨이브: 초당 생성 수가 너무 크면 경고, 웨이브별 러너+탱커 비율 합 확인 (값은 파생 기본값 포함)
+    const ws = Array.isArray(s.waves) ? s.waves : effectiveWaves(data, i);
+    const rows = [...ws.map((w, k) => [w, `웨이브 ${k + 1}`, k]), [effectiveBossWave(data, i), '보스 웨이브', -1]];
+    for (const [w, name, k] of rows) {
+      if (!isObj(w)) continue;
+      const rate = fin(w.count) / (fin(w.interval) > 0 ? w.interval : Infinity);
+      const path = k >= 0 ? `stages[${i}].waves[${k}]` : `stages[${i}].bossWave`;
+      if (rate > WAVE_RATE_WARN) out.push({ path, msg: `${n}: ${name} 초당 생성 수가 너무 큽니다 (${Math.round(rate)}마리/초, ${WAVE_RATE_WARN} 초과)` });
+      const r = w.runner ?? s.runner, t = w.tank ?? s.tank;
+      if (typeof r === 'number' && typeof t === 'number' && r + t > 1 + 1e-9 && (w.runner !== undefined || w.tank !== undefined)) {
+        out.push({ path, msg: `${n}: ${name} 러너+탱커 비율 합이 1을 넘습니다 (탱커가 먼저 배정됨)` });
+      }
     }
     for (const type of getTypes()) {
       if (!type.warnings) continue;

@@ -9,7 +9,7 @@ Three.js + Vite 기반 3D 디펜스 게임 프로토타입 (Mob Control 계열).
 ## 명령어
 
 - `npm run dev` — 개발 서버 (포트 **5737**, `vite.config.js`의 `strictPort: true`라서 사용 중이면 다른 포트로 넘어가지 않고 실패한다. 다른 개발과 포트가 겹치지 않도록 일부러 바꾼 값이니 임의로 되돌리지 말 것)
-- `npm run build` — `dist/`로 프로덕션 빌드
+- `npm run build` — `dist/`로 프로덕션 빌드 (게임 `index.html` + 에디터 `editor.html`, 상대 경로 `base: './'`라서 GitHub Pages 하위 경로에서도 동작)
 
 린터와 테스트는 설정되어 있지 않다. 동작 확인은 브라우저에서 직접 플레이해서 한다.
 
@@ -30,6 +30,13 @@ Three.js + Vite 기반 3D 디펜스 게임 프로토타입 (Mob Control 계열).
 - **월드는 전장 + 좌우 옆 구역 2개**다. 전장(`FIELD_W`)에서만 적이 내려온다. 옆 구역(`LANE_X`, `LANE_W`)은 하나가 2번 강화(크리스털 타격 → 공격속도), 다른 하나가 3번 강화(`대포 +1` 벽이 내려옴, 대포가 닿으면 대포 추가)이며, 어느 쪽이 무엇인지는 스테이지의 `crystalSide`/`itemSide`가 정한다. 대포·병사는 `WORLD_HALF`까지 움직일 수 있다. 전장과 옆 구역 사이에는 벽(`WALL_X`)이 있어 적은 x를 클램프하고 병사는 벽 구간(`z < WALL_END_Z`)에서 넘는 순간 튕겨 나온다. 대포가 건너갈 수 있게 대포 쪽은 비어 있다. **구역 소속은 병사 x로 정한다**: `|x| < WALL_X`면 전장, `|x| > WALL_X`면 옆 구역. 옆 구역 병사는 적을 유도하지 않고, 적도 전장 병사만 유도하며, 벽 뒤(`sz < WALL_END_Z`)의 옆 구역 병사는 적과 충돌하지 않는다.
 - **입력**은 대포를 눌러 잡고 드래그하는 방식이다. 대포 여러 대(최대 `MAX_CANNONS`=7)는 `CANNON_OFFSETS[n]`이 정한 원형 밀집 대형(정다각형, 7대는 가운데 1 + 둘레 6)으로 같이 움직이고, 발사·아이템 접촉·렌더링 모두 이 오프셋을 쓴다. 게임 상태는 `ready/play/clear/over/win` 상태 머신이고 `STAGES` 배열이 스테이지 5개의 게이트·보스·옆 구역 배치를 정의한다. 플레이 중이 아닐 때는 오버레이의 스테이지 버튼 1~5나 숫자 키 1~5로 스테이지를 고르고(잠금 없음, `loadStage`가 `ready`로 되돌림), Enter/Space 또는 클릭으로 시작한다(상태 전환 후 400ms 가드). 점수는 `loadStage`마다 0으로 리셋된다(누적 총점 없음, 결정된 사항).
 - 좌표계: 적은 `SPAWN_Z`(-16)에서 `BASE_Z`(8)로 내려오며(유도 규칙은 위), 대포는 `CANNON_Z`(9)에서 -z 방향으로 병사를 쏜다. 카메라는 고정 쿼터뷰이며 `fitCamera()`가 화면 비율에 맞춰 월드 폭이 다 보이도록 거리를 조정한다.
+
+## 데이터와 에디터
+
+- **맵·수치는 `src/data/game.json`이 정본이다.** 스테이지(게이트 `{op,val,x,z,w}`, 얼음 대포/대포 추가 벽 구역, 적 비율, 보스, 선택 필드 `waves`/`bossWave`), `enemyTypes`, `config`(병사 속도, 연사 간격, 타격 목표, 유도 반경 등)가 들어 있고 `main.js`의 `sanitizeData`가 검증해 읽는다(범위 밖이면 기본값 + `console.warn`). `waves`가 없으면 기존 공식과 같은 값으로 파생된다(`src/shared/gamedefaults.js`). 월드 치수는 `src/shared/world.js`가 게임·에디터 공용이다. URL `?draft=1`은 브라우저 임시본(`localStorage`)을, `?stage=N`은 시작 스테이지를 지정한다.
+- **에디터는 `/editor.html`(`src/editor/`, 구조와 새 오브젝트 추가 방법은 `src/editor/README.md`)**. 오브젝트 종류는 `objectTypes.js` 레지스트리로 등록한다. 기본 스테이지 1~5는 읽기 전용이고(복제는 맨 뒤에 추가), `🔓 편집 잠금 해제` 후 편집하며 삭제·순서 이동은 해제해도 불가다. 원본은 `src/data/backup/base-stages.json`에 있고 서버가 없을 때만 생성하며 덮어쓰지 않는다.
+- **저장 방식은 환경별로 다르다.** 개발 서버(`tools/vite-plugin-game-data.js`, `apply:'serve'`)가 있으면 저장 버튼이 `game.json`을 직접 덮어쓴다(영구, 커밋·재배포해야 배포본에 반영). 서버가 없으면(정적 배포) 에디터가 응답 형식을 확인해 `내려받기 모드`로 열리고 JSON 내려받기·불러오기만 쓴다. 편집 내용은 `localStorage['cannonDefense.editorWork']`에 자동 임시 저장되어 새로고침 후 복구할 수 있다(그 브라우저에서만).
+- 에디터의 검증 범위 일부(`schema.js`, `objectTypes.js`)는 `sanitizeData`의 복제본이라 게임 쪽 범위를 바꾸면 같이 바꿔야 한다.
 
 ## 에이전트 워크플로
 
