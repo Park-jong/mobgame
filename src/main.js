@@ -9,7 +9,7 @@ const WORLD_HALF = FIELD_W + LANE_GAP + LANE_W;   // 대포·병사가 갈 수 �
 const SPAWN_Z = -16;        // 적 생성 위치
 const BASE_Z = 8;           // 방어선
 const CANNON_Z = 9;
-const MAX_SOLDIERS = 2000;
+const MAX_SOLDIERS = 10000;
 const MAX_ENEMIES = 1500;
 const SOLDIER_SPEED = 4;
 const SOLDIER_R = 0.3;
@@ -315,6 +315,18 @@ const ez = new Float32Array(MAX_ENEMIES);
 const ehp = new Int16Array(MAX_ENEMIES);
 const etype = new Uint8Array(MAX_ENEMIES);
 let eCount = 0;
+const ENEMY_RESERVE = 16; // 보스 + 호위병(최대 8)용 여유 슬롯
+let soldierCapT = 0;      // 병사 상한으로 생성이 버려진 뒤 HUD에 MAX를 남겨 두는 시간(초)
+
+// 프레임마다 재사용하는 버퍼 (GC 방지)
+const deadBuf = new Int16Array(MAX_SOLDIERS);
+let deadCount = 0;
+const spawnX = new Float32Array(MAX_SOLDIERS);
+const spawnZ = new Float32Array(MAX_SOLDIERS);
+const spawnVx = new Float32Array(MAX_SOLDIERS);
+const spawnSrc = new Int16Array(MAX_SOLDIERS);
+const spawnFlags = new Int8Array(MAX_SOLDIERS * GATE_SLOTS);
+let spawnCount = 0;
 
 let state = 'ready';     // ready | play | clear | over | win
 let stateAt = 0;
@@ -326,7 +338,7 @@ let bossSpawned, bossMaxHp, bossAtk;
 function loadStage(idx) {
   stageIdx = idx;
   const st = STAGES[idx];
-  sCount = 0; eCount = 0;
+  sCount = 0; eCount = 0; soldierCapT = 0;
   hp = BASE_HP; stageTime = 0;
   score = 0; dragging = false; // 점수는 스테이지 시도마다 초기화
   fireTimer = 0; spawnTimer = 0; itemTimer = 3; summonTimer = 0;
@@ -361,11 +373,12 @@ function setState(s) {
 }
 
 // ---- 개체 추가/제거 ----
-function addSoldier(x, z, vx, flags) {
-  if (sCount >= MAX_SOLDIERS) return;
+// flags: 통과 플래그 배열(flagOff부터 GATE_SLOTS개) 또는 null
+function addSoldier(x, z, vx, flags, flagOff = 0) {
+  if (sCount >= MAX_SOLDIERS) { soldierCapT = 1; return; } // 상한: 버려지며 HUD에 MAX 표시
   const i = sCount++;
   sx[i] = x; sz[i] = z; svx[i] = vx;
-  for (let g = 0; g < GATE_SLOTS; g++) sGate[i * GATE_SLOTS + g] = flags ? flags[g] : 0;
+  for (let g = 0; g < GATE_SLOTS; g++) sGate[i * GATE_SLOTS + g] = flags ? flags[flagOff + g] : 0;
 }
 function removeSoldier(i) {
   const l = --sCount;
@@ -376,8 +389,9 @@ function enemyHp(type) {
   if (type === E_BOSS) return STAGES[stageIdx].boss.hp;
   return Math.max(1, Math.round(ETYPE[type].hp * (1 + stageIdx * 0.15)));
 }
-function addEnemy(x, type, z = SPAWN_Z) {
-  if (eCount >= MAX_ENEMIES) return false;
+// 일반 적은 보스 전용 여유 슬롯(ENEMY_RESERVE)을 남기고 막는다. 보스·호위병은 reserved=true로 전체 슬롯을 쓴다.
+function addEnemy(x, type, z = SPAWN_Z, reserved = false) {
+  if (eCount >= (reserved ? MAX_ENEMIES : MAX_ENEMIES - ENEMY_RESERVE)) return false;
   const i = eCount++;
   ex[i] = x; ez[i] = z; etype[i] = type; ehp[i] = enemyHp(type);
   return true;
@@ -502,11 +516,11 @@ function spawnGroup(waveIdx, isBossWave) {
 }
 function spawnBoss() {
   const b = STAGES[stageIdx].boss;
-  // 상한이라 보스 생성에 실패하면 다음 프레임에 다시 시도한다
-  if (!addEnemy(0, E_BOSS, SPAWN_Z - 1)) return;
+  // 보스는 여유 슬롯을 쓰므로 일반적으로 실패하지 않지만, 실패하면 다음 프레임에 다시 시도한다
+  if (!addEnemy(0, E_BOSS, SPAWN_Z - 1, true)) return;
   bossMaxHp = b.hp;
   if (b.escort) {
-    for (let k = 0; k < b.escort; k++) addEnemy((Math.random() * 2 - 1) * (FIELD_W - 1), E_RUNNER, SPAWN_Z - Math.random() * 3);
+    for (let k = 0; k < b.escort; k++) addEnemy((Math.random() * 2 - 1) * (FIELD_W - 1), E_RUNNER, SPAWN_Z - Math.random() * 3, true);
   }
   bossSpawned = true;
 }
@@ -595,10 +609,11 @@ function update(dt) {
     let speedMul = t === E_BOSS ? st.boss.speed : ETYPE[t].speed;
 
     // 적 유도: 앞쪽(대포 쪽) 일정 범위 안의 가장 가까운 병사를 향해 좌우로 조향. 유도 중에는 느려진다. (보스 제외)
-    if (t !== E_BOSS) {
+    if (t !== E_BOSS && sCount > 0) { // 병사가 없으면 탐색 생략
       const gx = cellX(ex[i]), gz = cellZ(ez[i]);
       let best = -1, bd = ENEMY_HOMING_R * ENEMY_HOMING_R;
       for (let oz = -2; oz <= 2; oz++) {
+        if (gz + oz < 0 || gz + oz >= GRID_D) continue;
         for (let ox = -2; ox <= 2; ox++) {
           const x = gx + ox, z = gz + oz;
           if (x < 0 || x >= GRID_W || z < 0 || z >= GRID_D) continue;
@@ -661,8 +676,8 @@ function update(dt) {
   }
 
   // --- 병사 이동 / 게이트 / 크리스털 / 충돌 ---
-  const dead = [];
-  const spawned = [];
+  deadCount = 0;
+  spawnCount = 0;
   const spawnLim = WALL_X - 0.45; // 벽 안쪽 면(WALL_X - 0.2)보다 0.25 안쪽 (벽 두께에 걸리지 않게)
   let crystalChanged = false;
   for (let i = 0; i < sCount; i++) {
@@ -674,8 +689,9 @@ function update(dt) {
       const gx = cellX(sx[i]), gz = cellZ(sz[i]);
       let best = -1, bd = HOMING_R * HOMING_R;
       // 전장 소속 병사만 적을 찾는다 (옆 구역 병사는 벽 너머라 제외)
-      const inField = Math.abs(sx[i]) < WALL_X;
+      const inField = Math.abs(sx[i]) < WALL_X && eCount > 0; // 적이 없으면 탐색 생략
       for (let oz = -2; oz <= 2 && inField; oz++) {
+        if (gz + oz < 0 || gz + oz >= GRID_D) continue;
         for (let ox = -2; ox <= 2; ox++) {
           const x = gx + ox, z = gz + oz;
           if (x < 0 || x >= GRID_W || z < 0 || z >= GRID_D) continue;
@@ -713,7 +729,7 @@ function update(dt) {
     if (sx[i] < -WORLD_HALF) { sx[i] = -WORLD_HALF; svx[i] = Math.abs(svx[i]); }
     if (sx[i] > WORLD_HALF) { sx[i] = WORLD_HALF; svx[i] = -Math.abs(svx[i]); }
 
-    if (sz[i] < SPAWN_Z - 3) { dead.push(i); continue; }
+    if (sz[i] < SPAWN_Z - 3) { deadBuf[deadCount++] = i; continue; }
 
     // 게이트 통과 (파괴된 게이트는 무시)
     for (let gi = 0; gi < gates.length; gi++) {
@@ -722,9 +738,15 @@ function update(dt) {
       if (pz > g.z && sz[i] <= g.z && Math.abs(sx[i] - g.x) < g.w / 2) {
         sGate[i * GATE_SLOTS + gi] = 1;
         const extra = g.op === '+' ? g.val : g.val - 1;
+        // 버퍼는 MAX_SOLDIERS개까지만 담는다: 제거 후 추가 가능한 수가 어차피 그 이하라 결과는 같다
         for (let k = 0; k < extra; k++) {
+          if (spawnCount >= MAX_SOLDIERS) { soldierCapT = 1; break; }
           // 벽/월드 바깥에 생성되지 않도록 x를 벽 안쪽으로 제한
-          spawned.push([THREE.MathUtils.clamp(sx[i] + (Math.random() - 0.5) * 1.2, -spawnLim, spawnLim),sz[i] - Math.random() * 0.8, (Math.random() - 0.5) * 2, i]);
+          const n = spawnCount++;
+          spawnX[n] = THREE.MathUtils.clamp(sx[i] + (Math.random() - 0.5) * 1.2, -spawnLim, spawnLim);
+          spawnZ[n] = sz[i] - Math.random() * 0.8;
+          spawnVx[n] = (Math.random() - 0.5) * 2;
+          spawnSrc[n] = i;
         }
       }
     }
@@ -734,7 +756,7 @@ function update(dt) {
     if (st.crystal && fireLevel < HIT_TARGETS.length) {
       const dx = sx[i] - crystal.x, dz = sz[i] - crystal.z;
       if (dx * dx + dz * dz < 1.7) {
-        dead.push(i);
+        deadBuf[deadCount++] = i;
         crystal.hits++;
         crystalChanged = true;
         if (crystal.hits >= HIT_TARGETS[fireLevel]) {
@@ -769,24 +791,24 @@ function update(dt) {
         }
       }
     }
-    if (hit) dead.push(i);
+    if (hit) deadBuf[deadCount++] = i;
   }
   if (crystalChanged) drawCrystalLabel();
 
   // 게이트로 생긴 병사는 통과 상태를 물려받는다 (제거 전 원본 인덱스 기준)
-  const spawnFlags = spawned.map(([, , , src]) => {
-    const f = [];
-    for (let g = 0; g < GATE_SLOTS; g++) f.push(sGate[src * GATE_SLOTS + g]);
-    return f;
-  });
+  for (let k = 0; k < spawnCount; k++) {
+    const src = spawnSrc[k];
+    for (let g = 0; g < GATE_SLOTS; g++) spawnFlags[k * GATE_SLOTS + g] = sGate[src * GATE_SLOTS + g];
+  }
 
   // 보스 처치 여부는 제거 전에 확인
   let bossAlive = false;
   for (let i = 0; i < eCount; i++) if (etype[i] === E_BOSS && ehp[i] > 0) { bossAlive = true; break; }
 
-  for (let k = dead.length - 1; k >= 0; k--) removeSoldier(dead[k]);
+  for (let k = deadCount - 1; k >= 0; k--) removeSoldier(deadBuf[k]);
   for (let i = eCount - 1; i >= 0; i--) if (ehp[i] <= 0) removeEnemy(i);
-  spawned.forEach(([x, z, vx], k) => addSoldier(x, z, vx, spawnFlags[k]));
+  for (let k = 0; k < spawnCount; k++) addSoldier(spawnX[k], spawnZ[k], spawnVx[k], spawnFlags, k * GATE_SLOTS);
+  soldierCapT = Math.max(0, soldierCapT - dt);
 
   // --- 스테이지 클리어 ---
   if (bossSpawned && !bossAlive) {
@@ -860,7 +882,7 @@ function render() {
   const wave = Math.min(3, Math.floor(stageTime / WAVE_DUR));
   hud.textContent =
     `STAGE ${stageIdx + 1}/${STAGES.length}  ${wave >= 3 ? 'BOSS' : `웨이브 ${wave + 1}/3`}   HP ${hp}   점수 ${score}\n` +
-    `병사 ${sCount}   대포 ${cannonCount}   공격속도 Lv${fireLevel}`;
+    `병사 ${sCount}${sCount >= MAX_SOLDIERS || soldierCapT > 0 ? ' MAX' : ''}   대포 ${cannonCount}   공격속도 Lv${fireLevel}`;
   hud.style.whiteSpace = 'pre-line';
   renderer.render(scene, camera);
 }
