@@ -215,7 +215,7 @@ for (let i = 0; i < MAX_CANNONS; i++) {
 // 얼음에서 빠져나와 대포 대형으로 날아가는 대포 (풀 재사용, 연속 달성 대비 레벨 수만큼)
 const FLY_DUR = 0.6;       // 비행 시간(초)
 const FLY_ARC = 3;         // 포물선 높이
-const ICE_CANNON_SCALE = 0.6;
+const ICE_CANNON_SCALE = 1.0; // 커진 얼음 안에서 작아 보이지 않게
 const flyers = [];
 for (let i = 0; i < HIT_TARGETS.length; i++) {
   const m = makeCannonModel(0);
@@ -402,6 +402,9 @@ function buildGates(list) {
 // ---- 타격 강화 크리스털 (노란 기둥, 고정) ----
 // 형태: 다음 단계 대포가 얼음에 갇힌 모습. mesh는 (얼음 + 균열 + 갇힌 대포) 그룹이라 회전/위치/표시를 한 번에 다룬다
 const ICE_CRACKS = 5;
+const ICE_W = LANE_W;  // 얼음 가로 폭: 옆 구역을 꽉 채움 (대포 추가 벽 ITEM_W와 같음)
+const ICE_D = 2.6;     // 얼음 깊이(z)
+const ICE_H = 2.4;     // 얼음 높이
 const crystal = {
   mesh: null, label: null, ctx: null, tex: null, x: -LANE_X, z: -5.5, hits: 0,
   ice: null, iceMat: null, cracks: [], cannon: null, hitFxT: 0,
@@ -414,17 +417,18 @@ const crystal = {
   const iceMat = new THREE.MeshStandardMaterial({
     color: 0x9fe3ff, emissive: 0x2a6a8a, transparent: true, opacity: 0.75, depthWrite: false, flatShading: true,
   });
-  const ice = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.2, 2.2), iceMat);
-  ice.position.y = 1.1; // 바닥에 닿는 정육면체
+  const ice = new THREE.Mesh(new THREE.BoxGeometry(ICE_W, ICE_H, ICE_D), iceMat);
+  ice.position.y = ICE_H / 2; // 바닥에 닿는 얼음 덩어리
   const cannon = makeCannonModel(1);
   cannon.group.position.y = 0.9;
   cannon.group.scale.setScalar(ICE_CANNON_SCALE);
   const crackMat = new THREE.MeshBasicMaterial({ color: 0xf0ffff });
   const crackGeo = new THREE.BoxGeometry(0.07, 0.9, 0.07);
   for (let k = 0; k < ICE_CRACKS; k++) {
-    const a = k * 2.5; // 둘레에 흩어 놓는다
+    const a = k * 2.5; // 얼음 폭 전체에 흩어 놓는다 (x는 폭을 5등분해 좌우로 고르게)
     const cr = new THREE.Mesh(crackGeo, crackMat);
-    cr.position.set(Math.sin(a) * 1.0, 0.7 + (k % 3) * 0.45, Math.cos(a) * 1.0);
+    cr.position.set(((k + 0.5) / ICE_CRACKS - 0.5) * (ICE_W - 0.6), 0.7 + (k % 3) * 0.55,
+      (k % 2 ? 1 : -1) * (ICE_D / 2 - 0.1) * (k % 3 === 2 ? 0.4 : 1));
     cr.rotation.set(0, a, (k % 2 ? 1 : -1) * (0.4 + 0.15 * k));
     cr.visible = false;
     mesh.add(cr);
@@ -437,7 +441,7 @@ const crystal = {
   crystal.tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: crystal.tex, depthTest: false }));
   sp.scale.set(2.6, 0.98, 1);
-  sp.position.set(crystal.x, 3.2, crystal.z);
+  sp.position.set(crystal.x, ICE_H + 1.0, crystal.z);
   sp.visible = false;
   scene.add(sp);
   crystal.mesh = mesh;
@@ -471,11 +475,11 @@ function refreshCrystalIce() {
 function crystalHitFx() {
   if (crystal.hitFxT > 0 || FX_MAX - fxCount < 60) return;
   crystal.hitFxT = 0.1;
-  fxBurst(crystal.x, crystal.z, 0.6, 1, 3);
+  fxBurst(crystal.x, crystal.z, 1.0, 1, 3);
 }
 // 얼음이 깨지는 순간: 파편을 크게 흩뿌리고, 갇혀 있던 대포(level 단계)를 대포 대형으로 날려 보낸다
 function crystalBreak(level) {
-  fxBurst(crystal.x, crystal.z, 0.9, 40, 3);
+  fxBurst(crystal.x, crystal.z, 1.6, 40, 3);
   const f = flyers.find((v) => !v.active);
   if (!f) { shownLevel = fireLevel; return; } // 풀 부족(발생 불가에 가까움): 즉시 반영
   f.active = true; f.t = 0; f.level = level;
@@ -716,6 +720,101 @@ const sGrid = Array.from({ length: GRID_W * GRID_D }, () => []); // 병사용 (�
 const cellX = (x) => Math.floor((x + FIELD_W) / CELL) + 1;
 const cellZ = (z) => Math.floor((z - SPAWN_Z) / CELL) + 2;
 
+// ================= 병사 밀어내기 (병사-병사, 병사-벽) =================
+// 병사 전용 균일 격자(head/next 연결 리스트, 고정 크기 타입 배열)로 이웃만 검사한다. 매 프레임 할당 없음.
+const SEP_CELL = 0.8;                       // 격자 셀 크기 (>= 2*SOLDIER_R)
+const SEP_Z0 = SPAWN_Z - 4;                 // 격자 z 시작 (이보다 아래로 간 병사는 곧 제거됨)
+const SEP_W = Math.ceil((WORLD_HALF * 2) / SEP_CELL) + 1;
+const SEP_D = Math.ceil((CANNON_Z + 3 - SEP_Z0) / SEP_CELL) + 1;
+const sepHead = new Int32Array(SEP_W * SEP_D);
+const sepNext = new Int32Array(MAX_SOLDIERS);
+const sepDx = new Float32Array(MAX_SOLDIERS);   // 병사별 누적 밀어내기량
+const sepDz = new Float32Array(MAX_SOLDIERS);
+const SEP_DIAM = SOLDIER_R * 2;
+const SEP_STRENGTH = 0.4;      // 겹침 중 각자 받는 비율 (최대 0.5 = 반씩). 1 미만으로 두어 여러 이웃이 겹칠 때 과보정 방지
+const SEP_MAX_STEP = 0.1;      // 병사당 프레임 최대 이동량 (과밀 시 떨림/발산 방지)
+const SEP_MAX_CHECK = 48;      // 병사당 프레임 최대 이웃 검사 수
+const WALL_HALF_T = 0.2;       // 벽 반두께
+const WALL_SOLDIER_LIM = WALL_X - WALL_HALF_T - SOLDIER_R;   // 전장 쪽 병사 중심 한계 |x| (6.75)
+const WALL_LANE_MIN = WALL_X + WALL_HALF_T + SOLDIER_R;      // 옆 구역 쪽 병사 중심 한계 |x| (7.75)
+
+// 이동·게이트 판정 이전에 호출해 위치를 확정한다.
+// 게이트(미통과, 살아 있음)의 z를 아래로 넘어가게 밀리면 게이트 바로 위에서 멈춰 통과 판정이 누락되지 않게 한다.
+function separateSoldiers() {
+  const n = sCount;
+  if (n === 0) return;
+  sepHead.fill(-1);
+  for (let i = 0; i < n; i++) {
+    let cx = Math.floor((sx[i] + WORLD_HALF) / SEP_CELL);
+    let cz = Math.floor((sz[i] - SEP_Z0) / SEP_CELL);
+    cx = cx < 0 ? 0 : cx >= SEP_W ? SEP_W - 1 : cx;
+    cz = cz < 0 ? 0 : cz >= SEP_D ? SEP_D - 1 : cz;
+    const c = cz * SEP_W + cx;
+    sepNext[i] = sepHead[c];
+    sepHead[c] = i;
+    sepDx[i] = 0;
+    sepDz[i] = 0;
+  }
+  // 병사-병사: 쌍(i<j)마다 겹침만큼 서로 반대로 민다 (누적 후 일괄 적용 = 순서 무관)
+  for (let i = 0; i < n; i++) {
+    const xi = sx[i], zi = sz[i];
+    let cx = Math.floor((xi + WORLD_HALF) / SEP_CELL);
+    let cz = Math.floor((zi - SEP_Z0) / SEP_CELL);
+    cx = cx < 0 ? 0 : cx >= SEP_W ? SEP_W - 1 : cx;
+    cz = cz < 0 ? 0 : cz >= SEP_D ? SEP_D - 1 : cz;
+    let checks = 0;
+    for (let oz = -1; oz <= 1 && checks < SEP_MAX_CHECK; oz++) {
+      const z = cz + oz;
+      if (z < 0 || z >= SEP_D) continue;
+      for (let ox = -1; ox <= 1 && checks < SEP_MAX_CHECK; ox++) {
+        const x = cx + ox;
+        if (x < 0 || x >= SEP_W) continue;
+        for (let j = sepHead[z * SEP_W + x]; j >= 0; j = sepNext[j]) {
+          if (j <= i) continue;
+          if (++checks > SEP_MAX_CHECK) break;
+          let dx = sx[j] - xi, dz = sz[j] - zi;
+          const d2 = dx * dx + dz * dz;
+          if (d2 >= SEP_DIAM * SEP_DIAM) continue;
+          let d = Math.sqrt(d2);
+          if (d < 1e-4) { // 완전히 같은 위치: 인덱스로 정한 고정 방향
+            const a = (i * 12.9898 + j * 78.233) % 6.2831853;
+            dx = Math.cos(a); dz = Math.sin(a); d = 0;
+          } else { dx /= d; dz /= d; }
+          const push = (SEP_DIAM - d) * SEP_STRENGTH;
+          sepDx[i] -= dx * push; sepDz[i] -= dz * push;
+          sepDx[j] += dx * push; sepDz[j] += dz * push;
+        }
+      }
+    }
+  }
+  // 적용: 이동량 캡 → 벽 → 월드 경계 → 게이트 z 보호
+  const capSq = SEP_MAX_STEP * SEP_MAX_STEP;
+  for (let i = 0; i < n; i++) {
+    let mx = sepDx[i], mz = sepDz[i];
+    const m2 = mx * mx + mz * mz;
+    if (m2 > capSq) { const s = SEP_MAX_STEP / Math.sqrt(m2); mx *= s; mz *= s; }
+    const oz = sz[i];
+    let x = sx[i] + mx, z = oz + mz;
+    // 벽 구간에서는 자기 쪽 구역(기존 규칙: |x| < WALL_X 전장, 그 외 옆 구역)에서 벽 두께+몸 반지름만큼 떨어진다
+    if (z < WALL_END_Z) {
+      const ax = Math.abs(x);
+      if (ax < WALL_X) { if (ax > WALL_SOLDIER_LIM) x = x < 0 ? -WALL_SOLDIER_LIM : WALL_SOLDIER_LIM; }
+      else if (ax < WALL_LANE_MIN) x = x < 0 ? -WALL_LANE_MIN : WALL_LANE_MIN;
+    }
+    if (x < -WORLD_HALF) x = -WORLD_HALF;
+    else if (x > WORLD_HALF) x = WORLD_HALF;
+    if (z > oz && z > CANNON_Z + 1) z = Math.max(oz, CANNON_Z + 1); // 대포 뒤로 밀려나지 않게
+    if (z < oz) {
+      for (let gi = 0; gi < gates.length; gi++) {
+        const g = gates[gi];
+        if (g.alive && oz > g.z && z <= g.z && !sGate[i * GATE_SLOTS + gi]) z = g.z + 0.001;
+      }
+    }
+    sx[i] = x;
+    sz[i] = z;
+  }
+}
+
 // ================= 웨이브 / 스폰 =================
 function spawnGroup(waveIdx, isBossWave) {
   const st = STAGES[stageIdx];
@@ -898,8 +997,9 @@ function update(dt) {
   // --- 병사 이동 / 게이트 / 크리스털 / 충돌 ---
   deadCount = 0;
   spawnCount = 0;
-  const spawnLim = WALL_X - 0.45; // 벽 안쪽 면(WALL_X - 0.2)보다 0.25 안쪽 (벽 두께에 걸리지 않게)
+  const spawnLim = WALL_SOLDIER_LIM; // 밀어내기의 전장 쪽 벽 한계와 같게 (생성 직후 벽에 겹치지 않게)
   let crystalChanged = false;
+  separateSoldiers(); // 이동·게이트 판정 이전에 위치 확정 (병사-병사, 병사-벽)
   for (let i = 0; i < sCount; i++) {
     const pz = sz[i];
     let speedMul = 1; // 유도 중에는 느려진다
@@ -975,7 +1075,7 @@ function update(dt) {
     // 같은 프레임에 최종 단계가 되면 남은 병사는 건너뛰도록 매번 평가
     if (st.crystal && fireLevel < HIT_TARGETS.length) {
       const dx = sx[i] - crystal.x, dz = sz[i] - crystal.z;
-      if (dx * dx + dz * dz < 1.7) {
+      if (Math.abs(dx) < ICE_W / 2 + SOLDIER_R && Math.abs(dz) < ICE_D / 2 + SOLDIER_R) { // 얼음 박스 직사각형 판정
         deadBuf[deadCount++] = i;
         crystal.hits++;
         crystalChanged = true;
