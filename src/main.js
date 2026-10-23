@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import gameData from './data/game.json';
+import { version } from '../package.json';
 import {
   FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, ENEMY_SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
 } from './shared/world.js';
 import {
-  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, deriveWave, deriveWaves, deriveBossWave,
+  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, ENDLESS_DEFAULTS, ENDLESS_LIMITS, ENDLESS_INT_KEYS, ENDLESS_SPEED_CAP, ENDLESS_BOSS_HP_CAP, deriveWave, deriveWaves, deriveBossWave,
 } from './shared/gamedefaults.js';
 
 // ================= 설정 =================
@@ -42,6 +43,16 @@ function num(v, def, min, max, path) {
   if (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max) return v;
   warn(`${path}: 값이 없거나 범위(${min}~${max})를 벗어나 기본값 ${def} 사용`);
   return def;
+}
+// 무한 모드 설정: 없는 키는 기본값, 범위 밖은 기본값 + 경고
+function sanitizeEndless(e, p) {
+  const out = {};
+  for (const key of Object.keys(ENDLESS_DEFAULTS)) {
+    const [lo, hi] = ENDLESS_LIMITS[key];
+    const v = e[key] === undefined ? ENDLESS_DEFAULTS[key] : num(e[key], ENDLESS_DEFAULTS[key], lo, hi, `${p}.${key}`);
+    out[key] = ENDLESS_INT_KEYS.includes(key) ? Math.floor(v) : v;
+  }
+  return out;
 }
 function str(v, def, path) {
   if (typeof v === 'string') return v;
@@ -229,6 +240,11 @@ function sanitizeData(raw) {
       runner,
       tank,
       boss,
+      // 선택 필드: 스테이지별 유도 반경 (없으면 전역 config 값, 0이면 그 쪽은 유도 없이 직선 이동)
+      ...(s.homingR !== undefined && { homingR: num(s.homingR, HOMING_DEFAULTS.homingR, HOMING_LIMITS.homingR[0], HOMING_LIMITS.homingR[1], `${p}.homingR`) }),
+      ...(s.hard !== undefined && { hard: bool(s.hard, false, `${p}.hard`) }),
+      ...(s.endless !== undefined && isObj(s.endless) && { endless: sanitizeEndless(s.endless, `${p}.endless`) }),
+      ...(s.enemyHomingR !== undefined && { enemyHomingR: num(s.enemyHomingR, HOMING_DEFAULTS.enemyHomingR, HOMING_LIMITS.enemyHomingR[0], HOMING_LIMITS.enemyHomingR[1], `${p}.enemyHomingR`) }),
       // waves / bossWave가 없으면 예전 고정 공식과 같은 값으로 채운다 (웨이브 k: 개수 3+2k+stageIdx, 간격 1초, 길이 waveDur)
       waves: sanitizeWaves(s.waves, p, i, config.waveDur),
       bossWave: sanitizeBossWave(s.bossWave, p, i),
@@ -268,6 +284,7 @@ if (usingDraft) {
   };
   document.body.appendChild(badge);
 }
+document.getElementById('ver').textContent = `v${version}`; // 화면 오른쪽 아래 버전: package.json의 version이 단일 출처
 const SOLDIER_SPEED = DATA.config.soldierSpeed;
 // 웨이브 길이·간격·개수는 스테이지의 waves / bossWave에서 읽는다 (없으면 sanitizeData가 예전 공식으로 채움, config.waveDur는 그 기본 길이)
 const HOMING_R = DATA.config.homingR;           // 병사 유도 감지 반경
@@ -290,6 +307,17 @@ const ETYPE = DATA.enemyTypes;
 
 // 스테이지 목록. 게이트는 {op, val, x, z, w} 명시 배열 (전장 폭 FIELD_W*2 = 14 기준)
 const STAGES = DATA.stages;
+// 하드 모드 스테이지(hard: true)의 번호(1부터, 하드끼리 센다). 일반·무한 모드는 0
+const HARD_NO = [];
+{ let k = 0; STAGES.forEach((s, i) => { HARD_NO[i] = s.hard ? ++k : 0; }); }
+const stageTitle = (i) => (STAGES[i].endless ? '무한 모드' : STAGES[i].hard ? `HARD ${HARD_NO[i]}` : `STAGE ${i + 1}`);
+// 클리어 후 이어질 스테이지: 같은 종류(일반/하드)의 다음 것. 없으면 -1 (그 종류를 모두 클리어)
+const nextStageIdx = (i) => {
+  for (let j = i + 1; j < STAGES.length; j++) if (!STAGES[j].endless && !!STAGES[j].hard === !!STAGES[i].hard) return j;
+  return -1;
+};
+// 그 종류의 첫 스테이지 (전부 클리어 후 처음부터)
+const firstStageIdx = (i) => Math.max(0, STAGES.findIndex((s) => !s.endless && !!s.hard === !!STAGES[i].hard));
 
 // ================= 렌더러 / 씬 =================
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -725,7 +753,8 @@ let sCount = 0;
 // 적 (SoA)
 const ex = new Float32Array(MAX_ENEMIES);
 const ez = new Float32Array(MAX_ENEMIES);
-const ehp = new Int16Array(MAX_ENEMIES);
+const ehp = new Int32Array(MAX_ENEMIES); // 무한 모드 보스 체력이 Int16을 넘을 수 있어 Int32
+const emax = new Int32Array(MAX_ENEMIES); // 생성 시 체력 (보스 체력바 비율용)
 const etype = new Uint8Array(MAX_ENEMIES);
 let eCount = 0;
 const ENEMY_RESERVE = 16; // 보스 + 호위병(최대 8)용 여유 슬롯
@@ -748,6 +777,7 @@ let hp, score, stageTime, fireTimer, spawnTimer, itemTimer, summonTimer;
 let cannonCount, cannonX, fireLevel;
 let shownLevel = 0; // 대포 모습(색/포신 굵기)에 쓰는 표시용 레벨. 얼음 속 대포가 도착하면 fireLevel을 따라간다
 let bossSpawned, bossMaxHp, bossAtk;
+let endlessBossN, endlessNextBossT; // 무한 모드: 지금까지 나온 보스 수 / 다음 보스 등장 시각(초)
 
 // 밸런스 확인용 누적 통계 (스테이지 시작마다 초기화). ?stats=1 이면 HUD에 표시하고 클리어/게임오버 시 콘솔에 표로 출력 (카운트와 window.__stats 조회는 항상 동작)
 const STATS_ON = new URLSearchParams(location.search).get('stats') === '1';
@@ -781,6 +811,7 @@ function loadStage(idx) {
   fireTimer = 0; spawnTimer = 0; itemTimer = ITEM_FIRST_DELAY; summonTimer = 0;
   cannonCount = 1; cannonX = 0; fireLevel = 0;
   bossSpawned = false; bossMaxHp = 0; bossAtk = 0;
+  endlessBossN = 0; endlessNextBossT = st.endless ? st.endless.bossFirst : Infinity;
   crystal.hits = 0;
   crystal.x = st.crystalSide * LANE_X;
   crystal.mesh.position.x = crystal.label.position.x = crystal.x;
@@ -792,7 +823,7 @@ function loadStage(idx) {
   if (FILL_ON) fillEnemies(st);
   fxClear();
   clearItems();
-  showOverlay(`STAGE ${idx + 1}`, st.desc, '클릭 또는 Enter로 시작 · 아래 번호로 스테이지 선택 · 대포를 잡고 드래그');
+  showOverlay(stageTitle(idx), st.desc, '클릭 또는 Enter로 시작 · 아래 번호로 스테이지 선택 · 대포를 잡고 드래그');
   state = 'ready'; stateAt = performance.now();
 }
 
@@ -827,19 +858,22 @@ function removeSoldier(i) {
 }
 function enemyHp(type) {
   if (type === E_BOSS) return STAGES[stageIdx].boss.hp;
-  return Math.max(1, Math.round(ETYPE[type].hp * (1 + stageIdx * 0.15)));
+  const ed = STAGES[stageIdx].endless; // 무한 모드는 스테이지 번호가 아니라 경과 시간으로 체력이 늘어난다
+  const mul = ed ? 1 + ed.hpPerMin * stageTime / 60 : 1 + stageIdx * 0.15;
+  return Math.max(1, Math.round(ETYPE[type].hp * mul));
 }
 // 일반 적은 보스 전용 여유 슬롯(ENEMY_RESERVE)을 남기고 막는다. 보스·호위병은 reserved=true로 전체 슬롯을 쓴다.
-function addEnemy(x, type, z = ENEMY_SPAWN_Z, reserved = false) {
+function addEnemy(x, type, z = ENEMY_SPAWN_Z, reserved = false, hpOverride = 0) {
   if (eCount >= (reserved ? MAX_ENEMIES : MAX_ENEMIES - ENEMY_RESERVE)) return false;
   const i = eCount++;
-  ex[i] = x; ez[i] = z; etype[i] = type; ehp[i] = enemyHp(type);
+  ex[i] = x; ez[i] = z; etype[i] = type; ehp[i] = hpOverride > 0 ? hpOverride : enemyHp(type);
+  emax[i] = ehp[i];
   stats.enemy++;
   return true;
 }
 function removeEnemy(i) {
   const l = --eCount;
-  ex[i] = ex[l]; ez[i] = ez[l]; ehp[i] = ehp[l]; etype[i] = etype[l];
+  ex[i] = ex[l]; ez[i] = ez[l]; ehp[i] = ehp[l]; emax[i] = emax[l]; etype[i] = etype[l];
 }
 
 // ================= 입력: 대포 드래그 =================
@@ -858,15 +892,18 @@ function halfSpan() {
   return m + 0.7 * CANNON_SCALE + 0.1;
 }
 
-// 스테이지 선택 버튼 (1~5)
+// 스테이지 선택 버튼: 일반 스테이지와 무한 모드는 윗줄, 하드 모드(hard)는 아랫줄에 붉은 버튼으로
 const pickBtns = [];
 {
-  const box = document.getElementById('stagePick');
+  const normalBox = document.getElementById('stagePick');
+  const hardBox = document.getElementById('stagePickHard');
+  hardBox.style.display = STAGES.some((s) => s.hard) ? 'flex' : 'none';
   STAGES.forEach((_, i) => {
+    const box = STAGES[i].hard ? hardBox : normalBox;
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = String(i + 1);
-    b.setAttribute('aria-label', `스테이지 ${i + 1}`);
+    b.textContent = STAGES[i].endless ? '∞' : STAGES[i].hard ? `🔥${HARD_NO[i]}` : String(i + 1);
+    b.setAttribute('aria-label', STAGES[i].endless ? `스테이지 ${i + 1} 무한 모드` : STAGES[i].hard ? `하드 모드 ${HARD_NO[i]}` : `스테이지 ${i + 1}`);
     b.addEventListener('click', () => {
       loadStage(i);
       b.blur(); // 포커스가 남으면 이후 Enter/Space가 버튼 click으로 처리되어 시작이 안 된다
@@ -880,7 +917,7 @@ let dragging = false;
 let grabOffset = 0;
 addEventListener('pointerdown', (e) => {
   // 스테이지 선택 버튼 클릭은 시작으로 처리하지 않는다
-  if (e.target.closest && e.target.closest('#stagePick')) return;
+  if (e.target.closest && e.target.closest('#stagePick, #stagePickHard')) return;
   if (state !== 'play') {
     if (performance.now() - stateAt > 400) advance();
     return;
@@ -909,7 +946,7 @@ addEventListener('keydown', (e) => {
   if (state === 'play') return;
   if (e.ctrlKey || e.metaKey || e.altKey) return; // 브라우저 단축키(Ctrl+1 탭 전환 등)는 무시
   if (e.repeat) return; // 키를 길게 눌러 advance()가 연속 실행되는 것 방지
-  if (e.key >= '1' && e.key <= String(STAGES.length)) {
+  if (/^[1-9]$/.test(e.key) && Number(e.key) <= STAGES.length) { // 숫자 키 = 목록 순서의 1~9번째 스테이지
     loadStage(Number(e.key) - 1);
   } else if ((e.key === 'Enter' || e.key === ' ') && e.target.tagName !== 'BUTTON') {
     // 버튼에 포커스가 있으면 브라우저가 click을 일으키므로 이중 처리하지 않는다
@@ -927,9 +964,9 @@ function advance() {
     hideOverlay();
     setState('play');
   } else if (state === 'clear') {
-    loadStage(stageIdx + 1);
+    loadStage(nextStageIdx(stageIdx));
   } else if (state === 'win' || state === 'over') {
-    loadStage(state === 'win' ? 0 : stageIdx);
+    loadStage(state === 'win' ? firstStageIdx(stageIdx) : stageIdx);
   }
 }
 
@@ -1069,7 +1106,10 @@ function pickEnemyType(runnerR, tankR) {
 }
 function spawnGroup(waveIdx, isBossWave) {
   const st = STAGES[stageIdx];
-  const wave = isBossWave ? st.bossWave : st.waves[waveIdx];
+  spawnWave(isBossWave ? st.bossWave : st.waves[waveIdx], st, 1.0 + stageIdx * 0.06);
+}
+// wave = { count, interval, runner?, tank? }, speed = 이 시점의 적 기본 속도 (줄 간격 계산용)
+function spawnWave(wave, st, speed) {
   const n = wave.count * SPAWN_MULT;
   const runnerR = wave.runner ?? st.runner; // 웨이브 값이 없으면 스테이지 값
   const tankR = wave.tank ?? st.tank;
@@ -1078,7 +1118,7 @@ function spawnGroup(waveIdx, isBossWave) {
     // 한 번에 나오는 행들은 다음 생성 전까지 적이 이동하는 거리(간격 × 기본 속도) 안에 고르게 펼쳐서 다음 그룹과 이어 붙게 한다
     const perRow = Math.floor((WALL_X - 0.8) * 2 / FILL_STEP) + 1;
     const rows = Math.ceil(n / perRow);
-    const depth = wave.interval * (1.0 + stageIdx * 0.06);
+    const depth = wave.interval * speed;
     let left = n;
     for (let r = 0; r < rows; r++) {
       let m = Math.min(perRow, left);
@@ -1109,13 +1149,36 @@ function spawnBoss() {
   bossSpawned = true;
 }
 
+// 무한 모드: 경과 시간 t에 맞는 생성 설정 (수·러너/탱커 비율이 점점 늘어난다)
+function endlessWave(ed, t) {
+  const ramp = (start) => Math.min(1, Math.max(0, (t - start) / ed.rampSec));
+  return {
+    count: Math.round(ed.countStart + (ed.countEnd - ed.countStart) * Math.min(1, t / ed.rampSec)),
+    interval: ed.interval,
+    runner: ed.runnerMax * ramp(ed.runnerStart),
+    tank: ed.tankMax * ramp(ed.tankStart),
+  };
+}
+// 무한 모드 보스: n번째(0부터) 보스 체력 = 스테이지 boss.hp × 증가율^n. 이전 보스가 살아 있어도 따로 나온다
+function spawnEndlessBoss(st, ed) {
+  const hp = Math.min(ENDLESS_BOSS_HP_CAP, Math.round(st.boss.hp * Math.pow(ed.bossHpGrowth, endlessBossN)));
+  if (!addEnemy(0, E_BOSS, ENEMY_SPAWN_Z - 1, true, hp)) return false; // 실패하면 다음 프레임에 다시 시도
+  endlessBossN++;
+  bossMaxHp = hp;
+  bossSpawned = true;
+  return true;
+}
+
 // ================= 업데이트 =================
 function update(dt) {
   stageTime += dt;
   const st = STAGES[stageIdx];
-  const waveIdx = waveIndexAt(st, stageTime);
-  const bossWave = waveIdx >= st.waves.length;
-  const baseSpeed = 1.0 + stageIdx * 0.06;
+  const ed = st.endless; // 있으면 무한 모드: 웨이브 표 대신 경과 시간으로 난이도가 오르고 클리어가 없다
+  const waveIdx = ed ? 0 : waveIndexAt(st, stageTime);
+  const bossWave = !ed && waveIdx >= st.waves.length;
+  const baseSpeed = ed ? 1.0 + Math.min(ENDLESS_SPEED_CAP, ed.speedPerMin * stageTime / 60) : 1.0 + stageIdx * 0.06;
+  const homingR = st.homingR ?? HOMING_R;             // 이 스테이지의 병사 유도 반경 (스테이지 값 > 전역)
+  const enemyHomingR = st.enemyHomingR ?? ENEMY_HOMING_R; // 이 스테이지의 적 유도 반경
 
   // --- 대포 발사 ---
   fireTimer += dt;
@@ -1130,11 +1193,20 @@ function update(dt) {
   }
 
   // --- 적 스폰 ---
-  if (bossWave && !bossSpawned) spawnBoss();
-  spawnTimer -= dt;
-  if (spawnTimer <= 0) {
-    spawnTimer = bossWave ? st.bossWave.interval : st.waves[waveIdx].interval;
-    spawnGroup(waveIdx, bossWave);
+  if (ed) {
+    if (stageTime >= endlessNextBossT && spawnEndlessBoss(st, ed)) endlessNextBossT += ed.bossEvery;
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnTimer = ed.interval;
+      spawnWave(endlessWave(ed, stageTime), st, baseSpeed);
+    }
+  } else {
+    if (bossWave && !bossSpawned) spawnBoss();
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnTimer = bossWave ? st.bossWave.interval : st.waves[waveIdx].interval;
+      spawnGroup(waveIdx, bossWave);
+    }
   }
   // 소환사 보스
   if (bossSpawned && st.boss.summon) {
@@ -1198,9 +1270,9 @@ function update(dt) {
     let speedMul = t === E_BOSS ? st.boss.speed : ETYPE[t].speed;
 
     // 적 유도: 앞쪽(대포 쪽) 일정 범위 안의 가장 가까운 병사를 향해 좌우로 조향. 유도 중에는 느려진다. (보스 제외)
-    if (t !== E_BOSS && sCount > 0) { // 병사가 없으면 탐색 생략
+    if (t !== E_BOSS && sCount > 0 && enemyHomingR > 0) { // 병사가 없거나 유도 반경이 0(직선 이동)이면 탐색 생략
       const gx = cellX(ex[i]), gz = cellZ(ez[i]);
-      let best = -1, bd = ENEMY_HOMING_R * ENEMY_HOMING_R;
+      let best = -1, bd = enemyHomingR * enemyHomingR;
       for (let oz = -2; oz <= 2; oz++) {
         if (gz + oz < 0 || gz + oz >= GRID_D) continue;
         for (let ox = -2; ox <= 2; ox++) {
@@ -1253,9 +1325,11 @@ function update(dt) {
   }
   if (hp <= 0) {
     hp = 0;
-    showOverlay('GAME OVER', `STAGE ${stageIdx + 1}\n점수 ${score}`, '클릭하여 다시 도전 · 번호로 스테이지 선택');
+    showOverlay('GAME OVER', ed
+      ? `무한 모드\n생존 ${fmtTime(stageTime)} · 보스 ${endlessBossN}마리 등장\n점수 ${score}`
+      : `${stageTitle(stageIdx)}\n점수 ${score}`, '클릭하여 다시 도전 · 번호로 스테이지 선택');
     setState('over');
-    logStats(`STAGE ${stageIdx + 1} GAME OVER`);
+    logStats(`${stageTitle(stageIdx)} GAME OVER`);
     dragging = false;
     return;
   }
@@ -1280,9 +1354,9 @@ function update(dt) {
     // 유도: 앞쪽 일정 범위 안에서 가장 가까운 적을 향해 좌우로 조향
     {
       const gx = cellX(sx[i]), gz = cellZ(sz[i]);
-      let best = -1, bd = HOMING_R * HOMING_R;
+      let best = -1, bd = homingR * homingR;
       // 전장 소속 병사만 적을 찾는다 (옆 구역 병사는 벽 너머라 제외)
-      const inField = Math.abs(sx[i]) < WALL_X && eCount > 0; // 적이 없으면 탐색 생략
+      const inField = Math.abs(sx[i]) < WALL_X && eCount > 0 && homingR > 0; // 적이 없거나 유도 반경이 0(직선 이동)이면 탐색 생략
       for (let oz = -2; oz <= 2 && inField; oz++) {
         if (gz + oz < 0 || gz + oz >= GRID_D) continue;
         for (let ox = -2; ox <= 2; ox++) {
@@ -1408,17 +1482,18 @@ function update(dt) {
   soldierCapT = Math.max(0, soldierCapT - dt);
 
   // --- 스테이지 클리어 ---
-  if (bossSpawned && !bossAlive) {
-    const last = stageIdx === STAGES.length - 1;
-    if (last) showOverlay('ALL CLEAR!', `모든 스테이지를 클리어했습니다\n점수 ${score}`, '클릭하여 처음부터 · 번호로 스테이지 선택');
-    else showOverlay(`STAGE ${stageIdx + 1} CLEAR`, `점수 ${score}`, '클릭하여 다음 스테이지 · 번호로 스테이지 선택');
+  if (!ed && bossSpawned && !bossAlive) { // 무한 모드는 클리어가 없다
+    const last = nextStageIdx(stageIdx) < 0; // 같은 종류(일반/하드)의 마지막 스테이지
+    if (last) showOverlay('ALL CLEAR!', `${STAGES[stageIdx].hard ? '모든 하드 모드를' : '모든 스테이지를'} 클리어했습니다\n점수 ${score}`, '클릭하여 처음부터 · 번호로 스테이지 선택');
+    else showOverlay(`${stageTitle(stageIdx)} CLEAR`, `점수 ${score}`, '클릭하여 다음 스테이지 · 번호로 스테이지 선택');
     setState(last ? 'win' : 'clear');
-    logStats(`STAGE ${stageIdx + 1} CLEAR`);
+    logStats(`${stageTitle(stageIdx)} CLEAR`);
     dragging = false;
   }
 }
 
 // ================= 렌더 =================
+const fmtTime = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const hud = document.getElementById('hud');
 const bossbar = document.getElementById('bossbar');
 const bossfill = document.getElementById('bossfill');
@@ -1436,7 +1511,7 @@ function render() {
   soldierMesh.instanceMatrix.needsUpdate = true;
 
   // 적 + 보스 체력바
-  let bossHp = -1;
+  let bossHp = -1, bossMax = 1;
   for (let i = 0; i < eCount; i++) {
     const t = etype[i];
     const s = ETYPE[t].scale;
@@ -1445,7 +1520,7 @@ function render() {
     dummy.updateMatrix();
     enemyMesh.setMatrixAt(i, dummy.matrix);
     enemyMesh.setColorAt(i, enemyColors[t]);
-    if (t === E_BOSS) bossHp = ehp[i];
+    if (t === E_BOSS && bossHp < 0) { bossHp = ehp[i]; bossMax = emax[i]; } // 보스가 여럿이면 앞선 하나
   }
   dummy.scale.setScalar(1);
   enemyMesh.count = eCount;
@@ -1455,8 +1530,8 @@ function render() {
   const showBoss = state === 'play' && bossHp > 0;
   bossbar.style.display = bosstext.style.display = showBoss ? 'block' : 'none';
   if (showBoss) {
-    bossfill.style.width = `${Math.max(0, (bossHp / bossMaxHp) * 100)}%`;
-    bosstext.textContent = `${STAGES[stageIdx].boss.name}  ${bossHp}/${bossMaxHp}`;
+    bossfill.style.width = `${Math.max(0, (bossHp / bossMax) * 100)}%`;
+    bosstext.textContent = `${STAGES[stageIdx].boss.name}  ${bossHp}/${bossMax}`;
   }
 
   // 대포
@@ -1497,7 +1572,7 @@ function render() {
   const waveCount = STAGES[stageIdx].waves.length;
   const wave = waveIndexAt(STAGES[stageIdx], stageTime);
   hud.textContent =
-    `STAGE ${stageIdx + 1}/${STAGES.length}  ${wave >= waveCount ? 'BOSS' : `웨이브 ${wave + 1}/${waveCount}`}   HP ${hp}   점수 ${score}\n` +
+    `STAGE ${stageIdx + 1}/${STAGES.length}  ${STAGES[stageIdx].endless ? `∞ ${fmtTime(stageTime)}  보스 ${endlessBossN}` : wave >= waveCount ? 'BOSS' : `웨이브 ${wave + 1}/${waveCount}`}   HP ${hp}   점수 ${score}\n` +
     `병사 ${sCount}${sCount >= MAX_SOLDIERS || soldierCapT > 0 ? ' MAX' : ''}   대포 ${cannonCount}   공격속도 Lv${fireLevel}` +
     (STATS_ON
       ? `\n[통계] 아군생성 ${stats.fired + stats.gate} (발사 ${stats.fired} + 게이트 ${stats.gate})   적생성 ${stats.enemy}\n` +

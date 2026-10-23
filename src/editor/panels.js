@@ -5,7 +5,7 @@ import {
   listOf, canAdd, checkField, getValue, MAX_STAGES, isLocked, isBaseStage, isBaseUnlocked, canMoveStage,
   effectiveWaves, effectiveBossWave, waveSummary,
 } from './model.js';
-import { STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES, BOSSWAVE_FIELDS, WAVE_LIST } from './schema.js';
+import { STAGE_FIELDS, BOSS_FIELDS, ENDLESS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES, BOSSWAVE_FIELDS, WAVE_LIST } from './schema.js';
 
 const h = (tag, props = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -227,8 +227,9 @@ export function createPanels(els, app) {
     box.replaceChildren();
     const data = app.getData();
     const tabs = h('div', { class: 'tabs' });
-    data.stages.forEach((_, i) => tabs.append(h('button', {
-      class: 'tab' + (i === app.getStageIdx() ? ' cur' : ''), text: (isLocked(i) ? '🔒' : isBaseStage(i) ? '🔓' : '') + String(i + 1),
+    data.stages.forEach((s, i) => tabs.append(h('button', {
+      class: 'tab' + (i === app.getStageIdx() ? ' cur' : ''),
+      text: (isLocked(i) ? '🔒' : isBaseStage(i) ? '🔓' : '') + (s.hard ? '🔥' : s.endless ? '∞' : '') + String(i + 1),
       title: `스테이지 ${i + 1}${isLocked(i) ? ' (기본 스테이지: 읽기 전용)' : isBaseStage(i) ? ' (기본 스테이지: 잠금 해제됨)' : ''}`,
       onclick: () => app.setStageIdx(i),
     })));
@@ -348,6 +349,17 @@ export function createPanels(els, app) {
     });
     forms.push(bf);
     box.append(bf.el, h('div', { class: 'hint', text: '보스 스폰 위치(x=0, z=SPAWN_Z-1)는 코드 고정이라 편집할 수 없습니다.' }));
+    if (stageOf().endless) {
+      // 무한 모드 스테이지: 웨이브 표 대신 시간에 따라 오르는 난이도 설정을 쓴다
+      box.append(h('h4', {}, '무한 모드 ', h('span', { class: 'tag', text: '웨이브 표는 쓰이지 않음' })));
+      const ef = buildForm(ENDLESS_FIELDS, () => stageOf().endless, {
+        readOnly: locked,
+        onInput: (field, v) => edit(() => app.setEndlessField(field, v)),
+      });
+      forms.push(ef);
+      box.append(ef.el, h('div', { class: 'hint', text: '보스 체력: 위 보스의 체력 × 증가율^(n번째). 보스는 방어선에서 멈춰 공격하고, 이전 보스가 살아 있어도 다음 보스가 나옵니다.' }));
+      return;
+    }
     renderWaves(box);
   }
 

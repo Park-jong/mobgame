@@ -369,6 +369,386 @@
         "interval": 0.8,
         "count": 27
       }
+    },
+    {
+      "desc": "하드 모드 1!\n스테이지 1과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": -1,
+      "itemSide": 1,
+      "runner": 0,
+      "tank": 0,
+      "boss": {
+        "name": "하드 거대병",
+        "hp": 600,
+        "speed": 0.3,
+        "dmg": 10
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
+      },
+      "hard": true,
+      "homingR": 0,
+      "enemyHomingR": 0
+    },
+    {
+      "desc": "하드 모드 2!\n스테이지 2과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "×",
+          "val": 3,
+          "x": 0,
+          "z": 0,
+          "w": 14
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": 1,
+      "itemSide": -1,
+      "runner": 0.25,
+      "tank": 0,
+      "boss": {
+        "name": "하드 질주 대장",
+        "hp": 800,
+        "speed": 0.5,
+        "dmg": 10,
+        "escort": 8
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
+      },
+      "hard": true,
+      "homingR": 0,
+      "enemyHomingR": 0
+    },
+    {
+      "desc": "하드 모드 3!\n스테이지 3과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "×",
+          "val": 3,
+          "x": 0,
+          "z": 0,
+          "w": 14
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": -1,
+      "itemSide": 1,
+      "runner": 0.25,
+      "tank": 0.12,
+      "boss": {
+        "name": "하드 철갑 거인",
+        "hp": 2000,
+        "speed": 0.2,
+        "dmg": 10
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
+      },
+      "hard": true,
+      "homingR": 0,
+      "enemyHomingR": 0
+    },
+    {
+      "desc": "하드 모드 4!\n스테이지 4과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "×",
+          "val": 3,
+          "x": 0,
+          "z": 0,
+          "w": 14
+        },
+        {
+          "op": "+",
+          "val": 15,
+          "x": 0,
+          "z": -3,
+          "w": 14
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": 1,
+      "itemSide": -1,
+      "runner": 0.3,
+      "tank": 0.15,
+      "boss": {
+        "name": "하드 소환사",
+        "hp": 2500,
+        "speed": 0.3,
+        "dmg": 10,
+        "summon": 4
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
+      },
+      "hard": true,
+      "homingR": 0,
+      "enemyHomingR": 0
+    },
+    {
+      "desc": "하드 모드 5!\n스테이지 5과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "×",
+          "val": 3,
+          "x": 0,
+          "z": 0,
+          "w": 14
+        },
+        {
+          "op": "+",
+          "val": 15,
+          "x": 0,
+          "z": -3,
+          "w": 14
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": -1,
+      "itemSide": 1,
+      "runner": 0.3,
+      "tank": 0.2,
+      "boss": {
+        "name": "하드 최종 보스",
+        "hp": 5000,
+        "speed": 0.25,
+        "dmg": 20,
+        "summon": 3.5
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
+      },
+      "hard": true,
+      "homingR": 0,
+      "enemyHomingR": 0
+    },
+    {
+      "desc": "무한 모드!\n처음에는 약한 적만 나오다 점점 강해집니다.\n일정 시간마다 보스가 나오고, 보스 체력은 갈수록 늘어납니다.",
+      "gates": [
+        {
+          "op": "×",
+          "val": 2,
+          "x": -3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "+",
+          "val": 10,
+          "x": 3.5,
+          "z": 3,
+          "w": 7
+        },
+        {
+          "op": "×",
+          "val": 3,
+          "x": 0,
+          "z": 0,
+          "w": 14
+        },
+        {
+          "op": "+",
+          "val": 15,
+          "x": 0,
+          "z": -3,
+          "w": 14
+        }
+      ],
+      "crystal": true,
+      "items": true,
+      "crystalSide": 1,
+      "itemSide": -1,
+      "runner": 0,
+      "tank": 0,
+      "boss": {
+        "name": "무한의 군주",
+        "hp": 400,
+        "speed": 0.3,
+        "dmg": 10
+      },
+      "endless": {
+        "rampSec": 150,
+        "countStart": 6,
+        "countEnd": 30,
+        "interval": 0.8,
+        "runnerStart": 20,
+        "runnerMax": 0.3,
+        "tankStart": 50,
+        "tankMax": 0.2,
+        "hpPerMin": 0.25,
+        "speedPerMin": 0.04,
+        "bossFirst": 180,
+        "bossEvery": 60,
+        "bossHpGrowth": 1.5
+      }
     }
   ]
 }

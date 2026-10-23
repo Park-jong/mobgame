@@ -5,7 +5,7 @@ import { getTypes, getType } from './objectTypes.js';
 import {
   clone, validate, warnings, History, serialize, listOf,
   addObject, removeObject, duplicateObject, applyPatch, editObjectField,
-  addStage, duplicateStage, removeStage, moveStage, setStageField, setBossField, isLocked, isBaseStage, lockedStagesMatch,
+  addStage, duplicateStage, removeStage, moveStage, setStageField, setBossField, setEndlessField, isLocked, isBaseStage, lockedStagesMatch,
   setBaseUnlocked, isBaseUnlocked, LOCKED_STAGE_COUNT, restoreStage, restoreAllStages, changedBaseStages,
   setWaveField, setBossWaveField, addWave, removeWave, resetWaves, prepareForSave,
 } from './model.js';
@@ -120,6 +120,7 @@ const app = {
   editObjectField(typeId, idx, field, v) { return editObjectField(data, stageIdx, typeId, idx, field, v); },
   setStageField(field, v) { return setStageField(data, stageIdx, field, v); },
   setBossField(field, v) { return setBossField(data, stageIdx, field, v); },
+  setEndlessField(field, v) { return setEndlessField(data, stageIdx, field, v); },
   setConfigField(field, v) { setValue(field, data.config, v); },
   setWaveField(k, field, v) { return setWaveField(data, stageIdx, k, field, v); },
   setBossWaveField(field, v) { return setBossWaveField(data, stageIdx, field, v); },

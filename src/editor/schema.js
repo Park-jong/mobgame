@@ -1,17 +1,53 @@
 // 스테이지/보스/전역 수치/적 종류 폼 정의. 범위는 main.js의 sanitizeData와 같다(바꿀 때 같이 바꿀 것).
 import { SPAWN_Z, BASE_Z } from '../shared/world.js';
-import { MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS } from '../shared/gamedefaults.js';
+import {
+  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, ENDLESS_LIMITS, ENDLESS_INT_KEYS,
+} from '../shared/gamedefaults.js';
 
-export const MAX_STAGES = 9;
+export const MAX_STAGES = 20; // 일반 5 + 하드 5 + 무한 1 + 여유
 // 기본 스테이지 잠금: 인덱스 0~(N-1) 스테이지는 수정·삭제·순서 이동 불가(복제만 가능). 0이면 잠금 해제.
 export const LOCKED_STAGE_COUNT = 5;
 export const ETYPE_COUNT = 4; // 일반병, 러너, 탱커, 보스 (코드 고정)
 export const ETYPE_NAMES = ['일반병', '러너', '탱커', '보스'];
 
+const optHoming = (name, label) => ({
+  name, label, type: 'number', min: HOMING_LIMITS[name][0], max: HOMING_LIMITS[name][1], step: 0.1, optional: true,
+  get: (s) => s[name],
+  set: (s, v) => { if (Number.isFinite(v)) s[name] = v; else delete s[name]; },
+});
 export const STAGE_FIELDS = [
   { name: 'desc', label: '설명', type: 'text', multiline: true },
+  {
+    name: 'hard', label: '하드 모드 (선택 화면 아랫줄 붉은 버튼)', type: 'checkbox',
+    get: (s) => s.hard === true,
+    set: (s, v) => { if (v) s.hard = true; else delete s.hard; },
+  },
   { name: 'runner', label: '러너 비율', type: 'number', min: 0, max: 1, step: 0.05 },
   { name: 'tank', label: '탱커 비율', type: 'number', min: 0, max: 1, step: 0.05 },
+  // 선택값: 비우면 전역 수치, 0이면 이 스테이지에서 그 쪽은 유도 없이 직선 이동
+  optHoming('homingR', '병사 유도 반경 (비움=전역, 0=직선)'),
+  optHoming('enemyHomingR', '적 유도 반경 (비움=전역, 0=직선)'),
+];
+
+// 무한 모드(stage.endless) 입력. 범위는 shared/gamedefaults.js = main.js sanitizeEndless와 같다
+const endlessField = (name, label, step) => ({
+  name, label, type: 'number', min: ENDLESS_LIMITS[name][0], max: ENDLESS_LIMITS[name][1], step,
+  int: ENDLESS_INT_KEYS.includes(name) || undefined,
+});
+export const ENDLESS_FIELDS = [
+  endlessField('rampSec', '난이도 상승 시간(초)', 10),
+  endlessField('countStart', '시작 생성 수/회', 1),
+  endlessField('countEnd', '최종 생성 수/회', 1),
+  endlessField('interval', '생성 간격(초)', 0.1),
+  endlessField('runnerStart', '러너 등장 시작(초)', 5),
+  endlessField('runnerMax', '러너 최대 비율', 0.05),
+  endlessField('tankStart', '탱커 등장 시작(초)', 5),
+  endlessField('tankMax', '탱커 최대 비율', 0.05),
+  endlessField('hpPerMin', '적 체력 증가(분당 배율)', 0.05),
+  endlessField('speedPerMin', '적 속도 증가(분당)', 0.01),
+  endlessField('bossFirst', '첫 보스 등장(초)', 10),
+  endlessField('bossEvery', '보스 간격(초)', 5),
+  endlessField('bossHpGrowth', '보스 체력 증가율(배)', 0.05),
 ];
 
 export const BOSS_FIELDS = [
@@ -65,8 +101,8 @@ export const CONFIG_FIELDS = [
   { name: 'itemFirstDelay', label: '첫 대포 추가 벽까지(초)', type: 'number', min: 0, max: 600, step: 0.5 },
   { name: 'crystalZ', label: '얼음 대포 z', type: 'number', min: SPAWN_Z, max: BASE_Z, step: 0.1 },
   // 반경 상한 4: 격자(셀 2칸) 5x5 탐색이 놓치지 않는 한계 (shared/gamedefaults.js 참고)
-  { name: 'homingR', label: '병사 유도 반경', type: 'number', min: HOMING_LIMITS.homingR[0], max: HOMING_LIMITS.homingR[1], step: 0.1, ...withDefault('homingR') },
-  { name: 'enemyHomingR', label: '적 유도 반경', type: 'number', min: HOMING_LIMITS.enemyHomingR[0], max: HOMING_LIMITS.enemyHomingR[1], step: 0.1, ...withDefault('enemyHomingR') },
+  { name: 'homingR', label: '병사 유도 반경 (0 = 직선)', type: 'number', min: HOMING_LIMITS.homingR[0], max: HOMING_LIMITS.homingR[1], step: 0.1, ...withDefault('homingR') },
+  { name: 'enemyHomingR', label: '적 유도 반경 (0 = 직선)', type: 'number', min: HOMING_LIMITS.enemyHomingR[0], max: HOMING_LIMITS.enemyHomingR[1], step: 0.1, ...withDefault('enemyHomingR') },
   { name: 'homingSlow', label: '유도 중 감속 배율', type: 'number', min: HOMING_LIMITS.homingSlow[0], max: HOMING_LIMITS.homingSlow[1], step: 0.05, ...withDefault('homingSlow') },
 ];
 

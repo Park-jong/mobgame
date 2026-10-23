@@ -4,7 +4,7 @@ import { getTypes, getType } from './objectTypes.js';
 import { checkField, validateFields, validateList, getValue, setValue } from './fields.js';
 import {
   MAX_STAGES, LOCKED_STAGE_COUNT, ETYPE_COUNT, STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES,
-  BOSSWAVE_FIELDS, WAVE_LIST,
+  BOSSWAVE_FIELDS, WAVE_LIST, ENDLESS_FIELDS,
 } from './schema.js';
 import { MAX_WAVES, deriveWave, deriveWaves, deriveBossWave } from '../shared/gamedefaults.js';
 
@@ -145,6 +145,12 @@ export function setStageField(data, si, field, value) {
   const stage = data.stages[si];
   if (isLocked(si) || !isObj(stage)) return false;
   setValue(field, stage, value);
+  return true;
+}
+export function setEndlessField(data, si, field, value) {
+  const stage = data.stages[si];
+  if (isLocked(si) || !isObj(stage) || !isObj(stage.endless)) return false;
+  setValue(field, stage.endless, value);
   return true;
 }
 export function setBossField(data, si, field, value) {
@@ -326,6 +332,10 @@ export function validate(data) {
     add(validateFields(STAGE_FIELDS, s, p));
     if (isObj(s.boss)) add(validateFields(BOSS_FIELDS, s.boss, `${p}.boss`).map((x) => ({ ...x, msg: `보스 ${x.msg}` })));
     else errs.push({ path: `${p}.boss`, msg: `${n}: boss는 객체여야 합니다` });
+    if (s.endless !== undefined) {
+      if (isObj(s.endless)) add(validateFields(ENDLESS_FIELDS, s.endless, `${p}.endless`).map((x) => ({ ...x, msg: `무한 모드 ${x.msg}` })));
+      else errs.push({ path: `${p}.endless`, msg: `${n}: endless는 객체여야 합니다` });
+    }
     // 웨이브 (없으면 파생 기본값이라 검사하지 않음)
     if (s.waves !== undefined) add(validateList(WAVE_LIST, s.waves, `${p}.waves`));
     if (s.bossWave !== undefined) {

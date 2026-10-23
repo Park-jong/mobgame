@@ -15,17 +15,22 @@
     #ovTitle { font-size: 36px; font-weight: bold; }
     #ovSub { font-size: 18px; margin-top: 12px; line-height: 1.6; white-space: pre-line; }
     #ovHint { font-size: 15px; margin-top: 18px; opacity: .8; }
-    #stagePick { display: flex; gap: 10px; margin-top: 22px; }
-    #stagePick button { width: 48px; height: 48px; font-size: 20px; font-weight: bold; color: #fff; background: rgba(255,255,255,.12); border: 2px solid #fff; border-radius: 8px; cursor: pointer; }
+    #stagePick, #stagePickHard { display: flex; gap: 10px; margin-top: 22px; }
+    #stagePickHard { margin-top: 10px; }
+    #stagePick button, #stagePickHard button { width: 48px; height: 48px; font-size: 20px; font-weight: bold; color: #fff; background: rgba(255,255,255,.12); border: 2px solid #fff; border-radius: 8px; cursor: pointer; }
     #stagePick button.cur { background: #3a7bd5; }
-    #stagePick button:focus-visible { outline: 3px solid #ffd23a; }
+    #stagePickHard button { color: #ffd6d6; background: rgba(200,40,40,.35); border-color: #ff6b6b; }
+    #stagePickHard button.cur { background: #d62f2f; color: #fff; }
+    #stagePick button:focus-visible, #stagePickHard button:focus-visible { outline: 3px solid #ffd23a; }
+    #ver { position: fixed; right: 8px; bottom: 6px; z-index: 60; font-size: 11px; color: rgba(255,255,255,.55); text-shadow: 0 1px 2px #000; pointer-events: none; user-select: none; }
   </style>
 </head>
 <body>
   <div id="hud"></div>
   <div id="bossbar"><div id="bossfill"></div></div>
   <div id="bosstext"></div>
-  <div id="over"><div id="ovTitle"></div><div id="ovSub"></div><div id="ovHint"></div><div id="stagePick"></div></div>
+  <div id="over"><div id="ovTitle"></div><div id="ovSub"></div><div id="ovHint"></div><div id="stagePick"></div><div id="stagePickHard"></div></div>
+  <div id="ver"></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
