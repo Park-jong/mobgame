@@ -1,0 +1,22 @@
+# 의존성 / 빌드 결과
+node_modules/
+dist/
+
+# 로그
+*.log
+npm-debug.log*
+
+# 환경 변수
+.env
+.env.*
+
+# 에디터 / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code 설정(에이전트, 훅, 스킬, TODO, 로컬 설정)은 저장소에서 제외한다.
+.claude/
+# 에이전트 요약 산출물
+agent-summaries/
