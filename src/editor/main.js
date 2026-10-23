@@ -5,7 +5,7 @@ import { getTypes, getType } from './objectTypes.js';
 import {
   clone, validate, warnings, History, serialize, listOf,
   addObject, removeObject, duplicateObject, applyPatch, editObjectField,
-  addStage, duplicateStage, removeStage, moveStage, setStageField, setBossField, setEndlessField, isLocked, isBaseStage, lockedStagesMatch,
+  addStage, duplicateStage, duplicateStageAsHard, removeStage, moveStage, setStageField, setBossField, setEndlessField, effectiveConfig, effectiveEtype, setStageConfigField, setStageEtypeField, resetStageOverrides, isLocked, isBaseStage, lockedStagesMatch,
   setBaseUnlocked, isBaseUnlocked, LOCKED_STAGE_COUNT, restoreStage, restoreAllStages, changedBaseStages,
   setWaveField, setBossWaveField, addWave, removeWave, resetWaves, prepareForSave,
 } from './model.js';
@@ -122,6 +122,17 @@ const app = {
   setBossField(field, v) { return setBossField(data, stageIdx, field, v); },
   setEndlessField(field, v) { return setEndlessField(data, stageIdx, field, v); },
   setConfigField(field, v) { setValue(field, data.config, v); },
+  // 현재 스테이지에 적용되는 수치/적 종류 (전역 + 스테이지 덮어쓰기)
+  getEffectiveConfig() { return effectiveConfig(data, stageIdx); },
+  getEffectiveEtype(k) { return effectiveEtype(data, stageIdx, k); },
+  setStageConfigField(field, v) { return setStageConfigField(data, stageIdx, field, v); },
+  setStageEtypeField(k, field, v) { return setStageEtypeField(data, stageIdx, k, field, v); },
+  resetOverrides(key) {
+    history.record(data);
+    if (!resetStageOverrides(data, stageIdx, key)) { history.discardLast(); return; }
+    afterChange(true);
+    statusMsg('이 스테이지의 값을 지우고 기본값(전역)으로 되돌렸습니다');
+  },
   setWaveField(k, field, v) { return setWaveField(data, stageIdx, k, field, v); },
   setBossWaveField(field, v) { return setBossWaveField(data, stageIdx, field, v); },
   // 구조가 바뀌는 웨이브 동작(행 추가/삭제/기본값): undo 기록 후 실행, 거부되면 기록 취소
@@ -171,12 +182,14 @@ const app = {
     let ni = -1;
     if (key === 'add') ni = addStage(data, stageIdx);
     else if (key === 'dup') ni = duplicateStage(data, stageIdx);
+    else if (key === 'hard') ni = duplicateStageAsHard(data, stageIdx);
     else if (key === 'del') ni = removeStage(data, stageIdx) ? Math.min(stageIdx, data.stages.length - 1) : -1;
     else if (key === 'up') ni = moveStage(data, stageIdx, -1);
     else if (key === 'down') ni = moveStage(data, stageIdx, 1);
     if (ni < 0) { history.discardLast(); return; }
     stageIdx = ni; sel = null; // add/dup은 맨 뒤에 추가된 새 스테이지를 선택
     if (key === 'add' || key === 'dup') statusMsg(`스테이지 ${ni + 1}로 복제했습니다`);
+    if (key === 'hard') statusMsg(`하드 모드 스테이지 ${ni + 1}로 복제했습니다 (유도 반경 0)`);
     afterChange(true);
   },
 };
@@ -369,7 +382,7 @@ addEventListener('keydown', (e) => {
   e.preventDefault();
   const type = getType(sel.typeId);
   const obj = listOf(data.stages[stageIdx], type)[sel.index];
-  const patch = type.nudge && obj ? type.nudge(obj, d[0], d[1], { config: data.config, stage: data.stages[stageIdx] }) : null;
+  const patch = type.nudge && obj ? type.nudge(obj, d[0], d[1], { config: effectiveConfig(data, stageIdx), stage: data.stages[stageIdx] }) : null;
   if (!patch) return;
   history.record(data);
   if (!applyPatch(data, stageIdx, sel.typeId, sel.index, patch)) { history.discardLast(); return; }

@@ -5,7 +5,7 @@ import {
   listOf, canAdd, checkField, getValue, MAX_STAGES, isLocked, isBaseStage, isBaseUnlocked, canMoveStage,
   effectiveWaves, effectiveBossWave, waveSummary,
 } from './model.js';
-import { STAGE_FIELDS, BOSS_FIELDS, ENDLESS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES, BOSSWAVE_FIELDS, WAVE_LIST } from './schema.js';
+import { STAGE_FIELDS, BOSS_FIELDS, ENDLESS_FIELDS, STAGE_CONFIG_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES, BOSSWAVE_FIELDS, WAVE_LIST } from './schema.js';
 
 const h = (tag, props = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -226,11 +226,13 @@ export function createPanels(els, app) {
     const box = els.stages;
     box.replaceChildren();
     const data = app.getData();
+    // 게임 선택 화면처럼 일반·무한은 윗줄, 하드 모드는 아랫줄(붉은색)
     const tabs = h('div', { class: 'tabs' });
-    data.stages.forEach((s, i) => tabs.append(h('button', {
-      class: 'tab' + (i === app.getStageIdx() ? ' cur' : ''),
+    const tabsHard = h('div', { class: 'tabs' });
+    data.stages.forEach((s, i) => (s.hard ? tabsHard : tabs).append(h('button', {
+      class: 'tab' + (s.hard ? ' hard' : '') + (i === app.getStageIdx() ? ' cur' : ''),
       text: (isLocked(i) ? '🔒' : isBaseStage(i) ? '🔓' : '') + (s.hard ? '🔥' : s.endless ? '∞' : '') + String(i + 1),
-      title: `스테이지 ${i + 1}${isLocked(i) ? ' (기본 스테이지: 읽기 전용)' : isBaseStage(i) ? ' (기본 스테이지: 잠금 해제됨)' : ''}`,
+      title: `스테이지 ${i + 1}${s.hard ? ' (하드 모드)' : s.endless ? ' (무한 모드)' : ''}${isLocked(i) ? ' (기본 스테이지: 읽기 전용)' : isBaseStage(i) ? ' (기본 스테이지: 잠금 해제됨)' : ''}`,
       onclick: () => app.setStageIdx(i),
     })));
     const n = data.stages.length;
@@ -239,10 +241,11 @@ export function createPanels(els, app) {
     const bar = h('div', { class: 'btnbar' },
       act('+ 추가', 'add', n >= MAX_STAGES, `현재 스테이지를 복제해 맨 뒤에 추가 (최대 ${MAX_STAGES}개)`),
       act('복제', 'dup', n >= MAX_STAGES, '현재 스테이지를 복제해 맨 뒤에 추가'),
+      act('🔥 하드 복제', 'hard', n >= MAX_STAGES || !!data.stages[cur].endless, data.stages[cur].endless ? '무한 모드는 하드 모드로 복제할 수 없습니다' : '현재 스테이지를 복제해 하드 모드(유도 꺼짐)로 맨 뒤에 추가'),
       act('삭제', 'del', n <= 1 || isBaseStage(cur), isBaseStage(cur) ? '기본 스테이지는 삭제할 수 없습니다' : '현재 스테이지 삭제 (최소 1개 유지)'),
       act('▲', 'up', !canMoveStage(data, cur, -1), '앞으로 이동'),
       act('▼', 'down', !canMoveStage(data, cur, 1), '뒤로 이동'));
-    box.append(h('h3', { text: '스테이지' }), tabs, bar);
+    box.append(h('h3', { text: '스테이지' }), tabs, ...(tabsHard.childNodes.length ? [tabsHard] : []), bar);
     if (isLocked(cur)) {
       box.append(h('div', { class: 'lockbox' },
         h('div', { text: '기본 스테이지 1~5는 읽기 전용입니다. 복제해서 수정하세요.' }),
@@ -250,6 +253,11 @@ export function createPanels(els, app) {
           text: '복제해서 편집', disabled: n >= MAX_STAGES ? '' : null,
           title: n >= MAX_STAGES ? `스테이지는 최대 ${MAX_STAGES}개입니다` : '맨 뒤에 복제하고 선택',
           onclick: () => app.stageAction('dup'),
+        }),
+        h('button', {
+          text: '🔥 하드로 복제', disabled: n >= MAX_STAGES ? '' : null,
+          title: n >= MAX_STAGES ? `스테이지는 최대 ${MAX_STAGES}개입니다` : '맨 뒤에 하드 모드(유도 꺼짐)로 복제하고 선택',
+          onclick: () => app.stageAction('hard'),
         }),
         h('button', {
           class: 'danger', text: '🔓 편집 잠금 해제', title: '기본 스테이지를 직접 편집합니다 (원본은 백업되어 있음, 이 세션에서만 유지)',
@@ -274,7 +282,7 @@ export function createPanels(els, app) {
         h('div', { class: 'hint', text: '복원 후 저장해야 game.json에 반영됩니다. 삭제와 순서 이동은 계속 막혀 있습니다.' }),
         canRestore ? null : h('div', { class: 'hint wrn', text: `백업을 쓸 수 없어 복원이 비활성입니다 (${app.backupReason()})` })));
     }
-    if (n > 5) box.append(h('div', { class: 'warnbox', text: '스테이지가 6개 이상입니다. 게임의 숫자 키 선택(1~5)은 일부만 지원합니다 (화면의 번호 버튼은 모두 동작).' }));
+    if (n > 9) box.append(h('div', { class: 'warnbox', text: '스테이지가 10개 이상입니다. 게임의 숫자 키는 목록 순서의 1~9번째만 선택합니다 (화면의 버튼은 모두 동작).' }));
   }
 
   function renderAdd() {
@@ -305,28 +313,29 @@ export function createPanels(els, app) {
       return;
     }
     const obj = () => listOf(stageOf(), type)[sel.index];
-    const label = type.describe ? type.describe(obj(), stage, app.getData().config) : type.label;
+    const label = type.describe ? type.describe(obj(), stage, app.getEffectiveConfig()) : type.label;
     const bar = h('div', { class: 'btnbar' },
       type.storage.kind === 'array' ? h('button', { text: '복제', disabled: locked() ? '' : null, onclick: () => app.duplicateSelected() }) : null,
       h('button', { text: type.storage.kind === 'flag' ? '끄기(제거)' : '삭제 (Del)', disabled: locked() ? '' : null, onclick: () => app.removeSelected() }));
     box.append(h('h3', { text: `선택: ${type.label} · ${label}` }), bar);
-    const noteCtx = () => ({ config: app.getData().config });
+    const noteCtx = () => ({ config: app.getEffectiveConfig() });
     const f = buildForm(type.fields, obj, {
       noteCtx, readOnly: locked,
       onInput: (field, v) => edit(() => app.editObjectField(sel.typeId, sel.index, field, v)),
     });
     forms.push(f);
     box.append(f.el);
-    // 타입이 선언한 전역 수치(configFields)는 같은 자리에서 바로 수정한다. 전역 값이라 스테이지 잠금과 무관하다
+    // 타입이 선언한 수치(configFields)는 같은 자리에서 바로 수정한다. 이 스테이지에만 적용되고(stage.config), 잠긴 스테이지는 읽기 전용
     if (type.configFields?.length) {
       const cf = CONFIG_FIELDS.filter((x) => type.configFields.includes(x.name));
-      const g = buildForm(cf, () => app.getData().config, {
-        onInput: (field, v) => edit(() => app.setConfigField(field, v)),
+      const g = buildForm(cf, () => app.getEffectiveConfig(), {
+        readOnly: locked,
+        onInput: (field, v) => edit(() => app.setStageConfigField(field, v)),
       });
       forms.push(g);
-      box.append(h('h4', {}, '전역 수치 ', h('span', { class: 'tag', text: '모든 스테이지에 적용됨' })), g.el);
+      box.append(h('h4', {}, '스테이지 수치 ', h('span', { class: 'tag', text: '이 스테이지에만 적용됨' })), g.el);
     }
-    for (const t of (type.notes ? type.notes(obj(), stage, app.getData().config) : [])) box.append(h('div', { class: 'hint', text: t }));
+    for (const t of (type.notes ? type.notes(obj(), stage, app.getEffectiveConfig()) : [])) box.append(h('div', { class: 'hint', text: t }));
   }
 
   function renderStageForm() {
@@ -339,6 +348,7 @@ export function createPanels(els, app) {
     const fields = [...STAGE_FIELDS, ...flagFields];
     const f = buildForm(fields, stageOf, {
       readOnly: locked,
+      noteCtx: () => ({ config: app.getEffectiveConfig() }),
       onInput: (field, v) => edit(() => app.setStageField(field, v)),
     });
     forms.push(f);
@@ -403,24 +413,52 @@ export function createPanels(els, app) {
     }));
   }
 
+  // 스테이지 수치: 이 스테이지에만 적용(stage.config). 값을 바꾸면 그 값만 스테이지에 저장되고, 나머지는 기본값(전역)을 따른다
   function renderConfig() {
     const box = els.config;
-    box.replaceChildren(h('h3', {}, '전역 수치 ', h('span', { class: 'tag', text: '모든 스테이지에 적용됨' })));
-    const f = buildForm(CONFIG_FIELDS, () => app.getData().config, {
-      onInput: (field, v) => edit(() => app.setConfigField(field, v)),
+    const cur = app.getStageIdx();
+    const has = !!stageOf().config && Object.keys(stageOf().config).length > 0;
+    box.replaceChildren(h('h3', {}, `스테이지 ${cur + 1} 수치 `, h('span', { class: 'tag', text: '이 스테이지에만 적용됨' })));
+    const f = buildForm(STAGE_CONFIG_FIELDS, () => app.getEffectiveConfig(), {
+      readOnly: locked,
+      onInput: (field, v) => edit(() => app.setStageConfigField(field, v)),
     });
     forms.push(f);
-    box.append(f.el);
+    box.append(f.el, h('div', { class: 'btnbar' }, h('button', {
+      text: '기본값(전역)으로 되돌리기', disabled: locked() || !has ? '' : null,
+      title: locked() ? '기본 스테이지는 읽기 전용입니다' : has ? '이 스테이지에 따로 정한 수치를 모두 지웁니다 (되돌리기 가능)' : '이 스테이지에 따로 정한 수치가 없습니다',
+      onclick: () => app.resetOverrides('config'),
+    })), h('div', { class: 'hint', text: has ? `따로 정한 수치: ${Object.keys(stageOf().config).join(', ')}` : '따로 정한 수치가 없어 기본값(전역)을 따릅니다.' }));
+    // 기본값(전역): 스테이지에 값이 없을 때 쓰는 값. 바꾸면 값을 따로 정하지 않은 모든 스테이지에 적용된다
+    const g = buildForm(CONFIG_FIELDS, () => app.getData().config, {
+      onInput: (field, v) => edit(() => app.setConfigField(field, v)),
+    });
+    forms.push(g);
+    box.append(h('details', {}, h('summary', { text: '기본값 (전역) — 값을 따로 정하지 않은 스테이지가 사용' }), g.el));
   }
 
   function renderEtypes() {
     const box = els.etypes;
-    box.replaceChildren(h('h3', {}, '적 종류 ', h('span', { class: 'tag', text: '모든 스테이지에 적용됨' })));
-    const t = buildTable(ETYPE_FIELDS, () => app.getData().enemyTypes.slice(0, ETYPE_NAMES.length), ETYPE_NAMES, {
-      onInput: (ri, field, v) => edit(() => app.setEtypeField(ri, field, v)),
+    const cur = app.getStageIdx();
+    const st = stageOf();
+    const has = Array.isArray(st.enemyTypes) && st.enemyTypes.some((o) => o && Object.keys(o).length > 0);
+    box.replaceChildren(h('h3', {}, `스테이지 ${cur + 1} 적 종류 `, h('span', { class: 'tag', text: '이 스테이지에만 적용됨' })));
+    const n = ETYPE_NAMES.length;
+    const t = buildTable(ETYPE_FIELDS, () => Array.from({ length: n }, (_, k) => app.getEffectiveEtype(k)), ETYPE_NAMES, {
+      readOnly: locked,
+      onInput: (ri, field, v) => edit(() => app.setStageEtypeField(ri, field, v)),
     });
     forms.push(t);
-    box.append(h('div', { class: 'tablewrap' }, t.el));
+    box.append(h('div', { class: 'tablewrap' }, t.el), h('div', { class: 'btnbar' }, h('button', {
+      text: '기본값(전역)으로 되돌리기', disabled: locked() || !has ? '' : null,
+      title: locked() ? '기본 스테이지는 읽기 전용입니다' : has ? '이 스테이지에 따로 정한 적 종류 값을 모두 지웁니다 (되돌리기 가능)' : '이 스테이지에 따로 정한 값이 없습니다',
+      onclick: () => app.resetOverrides('enemyTypes'),
+    })), h('div', { class: 'hint', text: has ? '표의 값 중 바꾼 것만 이 스테이지에 저장됩니다.' : '따로 정한 값이 없어 기본값(전역)을 따릅니다.' }));
+    const gt = buildTable(ETYPE_FIELDS, () => app.getData().enemyTypes.slice(0, n), ETYPE_NAMES, {
+      onInput: (ri, field, v) => edit(() => app.setEtypeField(ri, field, v)),
+    });
+    forms.push(gt);
+    box.append(h('details', {}, h('summary', { text: '기본값 (전역) — 값을 따로 정하지 않은 스테이지가 사용' }), h('div', { class: 'tablewrap' }, gt.el)));
   }
 
   function renderIssues() {

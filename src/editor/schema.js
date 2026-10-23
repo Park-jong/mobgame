@@ -1,7 +1,7 @@
 // 스테이지/보스/전역 수치/적 종류 폼 정의. 범위는 main.js의 sanitizeData와 같다(바꿀 때 같이 바꿀 것).
 import { SPAWN_Z, BASE_Z } from '../shared/world.js';
 import {
-  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, ENDLESS_LIMITS, ENDLESS_INT_KEYS,
+  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, STAGE_CONFIG_KEYS, ENDLESS_LIMITS, ENDLESS_INT_KEYS,
 } from '../shared/gamedefaults.js';
 
 export const MAX_STAGES = 20; // 일반 5 + 하드 5 + 무한 1 + 여유
@@ -10,11 +10,6 @@ export const LOCKED_STAGE_COUNT = 5;
 export const ETYPE_COUNT = 4; // 일반병, 러너, 탱커, 보스 (코드 고정)
 export const ETYPE_NAMES = ['일반병', '러너', '탱커', '보스'];
 
-const optHoming = (name, label) => ({
-  name, label, type: 'number', min: HOMING_LIMITS[name][0], max: HOMING_LIMITS[name][1], step: 0.1, optional: true,
-  get: (s) => s[name],
-  set: (s, v) => { if (Number.isFinite(v)) s[name] = v; else delete s[name]; },
-});
 export const STAGE_FIELDS = [
   { name: 'desc', label: '설명', type: 'text', multiline: true },
   {
@@ -24,9 +19,14 @@ export const STAGE_FIELDS = [
   },
   { name: 'runner', label: '러너 비율', type: 'number', min: 0, max: 1, step: 0.05 },
   { name: 'tank', label: '탱커 비율', type: 'number', min: 0, max: 1, step: 0.05 },
-  // 선택값: 비우면 전역 수치, 0이면 이 스테이지에서 그 쪽은 유도 없이 직선 이동
-  optHoming('homingR', '병사 유도 반경 (비움=전역, 0=직선)'),
-  optHoming('enemyHomingR', '적 유도 반경 (비움=전역, 0=직선)'),
+  {
+    name: '_homing', type: 'note',
+    text: (s, ctx) => {
+      const c = (ctx && ctx.config) || {}; // ctx.config = 이 스테이지에 적용되는 수치
+      const eff = (k) => { const v = c[k] ?? HOMING_DEFAULTS[k]; return v === 0 ? '꺼짐(직선)' : String(v); };
+      return `적용되는 유도 — 병사: ${eff('homingR')} / 적: ${eff('enemyHomingR')}${s.hard && (c.homingR !== 0 || c.enemyHomingR !== 0) ? ' · 하드 모드인데 유도가 켜져 있습니다' : ''}`;
+    },
+  },
 ];
 
 // 무한 모드(stage.endless) 입력. 범위는 shared/gamedefaults.js = main.js sanitizeEndless와 같다
@@ -105,6 +105,9 @@ export const CONFIG_FIELDS = [
   { name: 'enemyHomingR', label: '적 유도 반경 (0 = 직선)', type: 'number', min: HOMING_LIMITS.enemyHomingR[0], max: HOMING_LIMITS.enemyHomingR[1], step: 0.1, ...withDefault('enemyHomingR') },
   { name: 'homingSlow', label: '유도 중 감속 배율', type: 'number', min: HOMING_LIMITS.homingSlow[0], max: HOMING_LIMITS.homingSlow[1], step: 0.05, ...withDefault('homingSlow') },
 ];
+
+// 스테이지별로 덮어쓸 수 있는 수치 (waveDur는 전역 전용)
+export const STAGE_CONFIG_FIELDS = CONFIG_FIELDS.filter((f) => STAGE_CONFIG_KEYS.includes(f.name));
 
 export const ETYPE_FIELDS = [
   { name: 'name', label: '이름', type: 'text' },

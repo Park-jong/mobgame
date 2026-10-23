@@ -422,8 +422,10 @@
         "count": 27
       },
       "hard": true,
-      "homingR": 0,
-      "enemyHomingR": 0
+      "config": {
+        "homingR": 0,
+        "enemyHomingR": 0
+      }
     },
     {
       "desc": "하드 모드 2!\n스테이지 2과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
@@ -485,8 +487,10 @@
         "count": 27
       },
       "hard": true,
-      "homingR": 0,
-      "enemyHomingR": 0
+      "config": {
+        "homingR": 0,
+        "enemyHomingR": 0
+      }
     },
     {
       "desc": "하드 모드 3!\n스테이지 3과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
@@ -547,8 +551,10 @@
         "count": 27
       },
       "hard": true,
-      "homingR": 0,
-      "enemyHomingR": 0
+      "config": {
+        "homingR": 0,
+        "enemyHomingR": 0
+      }
     },
     {
       "desc": "하드 모드 4!\n스테이지 4과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
@@ -617,8 +623,10 @@
         "count": 27
       },
       "hard": true,
-      "homingR": 0,
-      "enemyHomingR": 0
+      "config": {
+        "homingR": 0,
+        "enemyHomingR": 0
+      }
     },
     {
       "desc": "하드 모드 5!\n스테이지 5과 같은 구성이지만\n아군과 적 모두 유도가 꺼져 있습니다.",
@@ -687,8 +695,10 @@
         "count": 27
       },
       "hard": true,
-      "homingR": 0,
-      "enemyHomingR": 0
+      "config": {
+        "homingR": 0,
+        "enemyHomingR": 0
+      }
     },
     {
       "desc": "무한 모드!\n처음에는 약한 적만 나오다 점점 강해집니다.\n일정 시간마다 보스가 나오고, 보스 체력은 갈수록 늘어납니다.",

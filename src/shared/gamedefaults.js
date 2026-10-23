@@ -22,6 +22,12 @@ export const HOMING_DEFAULTS = { homingR: 3.5, enemyHomingR: 3, homingSlow: 0.6 
 // homingR / enemyHomingR = 0 이면 병사 / 적은 유도하지 않고 직선으로만 움직인다
 export const HOMING_LIMITS = { homingR: [0, 4], enemyHomingR: [0, 4], homingSlow: [0.1, 1] };
 
+// 스테이지가 자기 값으로 덮어쓸 수 있는 config 키 (stage.config). 없으면 전역 config 값. waveDur는 웨이브 기본값 파생에만 쓰이는 전역 값이라 제외
+export const STAGE_CONFIG_KEYS = [
+  'soldierSpeed', 'fireIntervals', 'hitTargets', 'baseHp', 'itemInterval', 'itemFirstDelay', 'crystalZ',
+  'homingR', 'enemyHomingR', 'homingSlow',
+];
+
 // ---- 무한 모드 (스테이지의 선택 객체 endless) ----
 // 시간 t(초)에 따라: 한 번에 나오는 수가 countStart → countEnd로 rampSec 동안 늘고, 러너/탱커는 각각 runnerStart/tankStart 이후
 // rampSec 동안 0 → 최대 비율로 늘며, 일반 적 체력 배율 1 + hpPerMin × 분, 적 속도 + speedPerMin × 분(상한 ENDLESS_SPEED_CAP).

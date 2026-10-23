@@ -133,7 +133,7 @@ export function createView(canvas, app) {
     const si = app.getStageIdx();
     const stage = data.stages[si];
     if (!stage) return;
-    const dc = makeDc(stage, data.config);
+    const dc = makeDc(stage, app.getEffectiveConfig());
     drawWorld(dc, stage);
     const sel = app.getSel();
     for (const type of getTypes()) {
@@ -152,7 +152,7 @@ export function createView(canvas, app) {
     const data = app.getData();
     const si = app.getStageIdx();
     const stage = data.stages[si];
-    const ctx = { tol: 7 / s, stage, config: data.config };
+    const ctx = { tol: 7 / s, stage, config: app.getEffectiveConfig() };
     const sel = app.getSel();
     const types = getTypes();
     for (let t = types.length - 1; t >= 0; t--) {
@@ -204,7 +204,7 @@ export function createView(canvas, app) {
       const noSnap = e.shiftKey;
       const patch = type.onDrag(drag.start, {
         mode: drag.mode, grab: drag.grab, pt: w, dx: w.x - drag.grab.x, dz: w.z - drag.grab.z,
-        snap: (v) => (noSnap ? round3(v) : snapTo(v, 0.5)), stage: data.stages[app.getStageIdx()], config: data.config,
+        snap: (v) => (noSnap ? round3(v) : snapTo(v, 0.5)), stage: data.stages[app.getStageIdx()], config: app.getEffectiveConfig(),
       });
       app.patch(drag.typeId, drag.index, patch);
       draw();

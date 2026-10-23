@@ -4,7 +4,7 @@ import { getTypes, getType } from './objectTypes.js';
 import { checkField, validateFields, validateList, getValue, setValue } from './fields.js';
 import {
   MAX_STAGES, LOCKED_STAGE_COUNT, ETYPE_COUNT, STAGE_FIELDS, BOSS_FIELDS, CONFIG_FIELDS, ETYPE_FIELDS, ETYPE_NAMES,
-  BOSSWAVE_FIELDS, WAVE_LIST, ENDLESS_FIELDS,
+  BOSSWAVE_FIELDS, WAVE_LIST, ENDLESS_FIELDS, STAGE_CONFIG_FIELDS,
 } from './schema.js';
 import { MAX_WAVES, deriveWave, deriveWaves, deriveBossWave } from '../shared/gamedefaults.js';
 
@@ -122,6 +122,19 @@ export function duplicateStage(data, idx) {
   data.stages.push(clone(data.stages[idx])); // 항상 맨 뒤 (잠긴 스테이지의 인덱스가 밀리지 않게)
   return data.stages.length - 1;
 }
+// 하드 모드로 복제: 맨 뒤에 복제하고 hard 표시 + 병사·적 유도 반경 0(직선 이동). 무한 모드는 하드가 없다
+export function duplicateStageAsHard(data, idx) {
+  const src = data.stages[idx];
+  if (!isObj(src) || isObj(src.endless)) return -1;
+  const ni = duplicateStage(data, idx);
+  if (ni < 0) return -1;
+  const h = data.stages[ni];
+  h.hard = true;
+  h.config = { ...(isObj(h.config) ? h.config : {}), homingR: 0, enemyHomingR: 0 };
+  if (isObj(h.boss) && typeof h.boss.name === 'string' && !h.boss.name.startsWith('하드 ')) h.boss.name = `하드 ${h.boss.name}`;
+  h.desc = `하드 모드!\n아군과 적 모두 유도가 꺼져 있습니다.`;
+  return ni;
+}
 export function removeStage(data, idx) {
   if (isBaseStage(idx) || data.stages.length <= 1 || !data.stages[idx]) return false;
   data.stages.splice(idx, 1);
@@ -147,6 +160,41 @@ export function setStageField(data, si, field, value) {
   setValue(field, stage, value);
   return true;
 }
+// ---------- 스테이지별 수치 (stage.config / stage.enemyTypes: 있는 값만 전역 위에 덮어씀) ----------
+// 이 스테이지에 실제로 적용되는 config (전역 + stage.config)
+export function effectiveConfig(data, si) {
+  const st = data.stages[si];
+  return { ...data.config, ...(isObj(st) && isObj(st.config) ? st.config : {}) };
+}
+// 이 스테이지의 적 종류 k (전역 + stage.enemyTypes[k])
+export function effectiveEtype(data, si, k) {
+  const st = data.stages[si];
+  const o = isObj(st) && Array.isArray(st.enemyTypes) && isObj(st.enemyTypes[k]) ? st.enemyTypes[k] : {};
+  return { ...(data.enemyTypes[k] ?? {}), ...o };
+}
+export function setStageConfigField(data, si, field, value) {
+  const st = data.stages[si];
+  if (isLocked(si) || !isObj(st)) return false;
+  if (!isObj(st.config)) st.config = {};
+  setValue(field, st.config, value);
+  return true;
+}
+export function setStageEtypeField(data, si, k, field, value) {
+  const st = data.stages[si];
+  if (isLocked(si) || !isObj(st) || !data.enemyTypes[k]) return false;
+  if (!Array.isArray(st.enemyTypes)) st.enemyTypes = [];
+  for (let i = 0; i < ETYPE_COUNT; i++) if (!isObj(st.enemyTypes[i])) st.enemyTypes[i] = {};
+  setValue(field, st.enemyTypes[k], value);
+  return true;
+}
+// 이 스테이지의 덮어쓰기를 지워 전역 값으로 되돌린다 ('config' | 'enemyTypes')
+export function resetStageOverrides(data, si, key) {
+  const st = data.stages[si];
+  if (isLocked(si) || !isObj(st) || st[key] === undefined) return false;
+  delete st[key];
+  return true;
+}
+
 export function setEndlessField(data, si, field, value) {
   const stage = data.stages[si];
   if (isLocked(si) || !isObj(stage) || !isObj(stage.endless)) return false;
@@ -332,6 +380,18 @@ export function validate(data) {
     add(validateFields(STAGE_FIELDS, s, p));
     if (isObj(s.boss)) add(validateFields(BOSS_FIELDS, s.boss, `${p}.boss`).map((x) => ({ ...x, msg: `보스 ${x.msg}` })));
     else errs.push({ path: `${p}.boss`, msg: `${n}: boss는 객체여야 합니다` });
+    // 스테이지별 수치: 있는 값만 검사 (없으면 전역 값)
+    if (s.config !== undefined) {
+      if (isObj(s.config)) add(validateFields(STAGE_CONFIG_FIELDS.filter((f) => s.config[f.name] !== undefined), s.config, `${p}.config`));
+      else errs.push({ path: `${p}.config`, msg: `${n}: config는 객체여야 합니다` });
+    }
+    if (s.enemyTypes !== undefined) {
+      if (!Array.isArray(s.enemyTypes)) errs.push({ path: `${p}.enemyTypes`, msg: `${n}: enemyTypes는 배열이어야 합니다` });
+      else s.enemyTypes.forEach((o, k) => {
+        if (!isObj(o)) return;
+        add(validateFields(ETYPE_FIELDS.filter((f) => o[f.name] !== undefined), o, `${p}.enemyTypes[${k}]`).map((x) => ({ ...x, msg: `${ETYPE_NAMES[k] ?? k} ${x.msg}` })));
+      });
+    }
     if (s.endless !== undefined) {
       if (isObj(s.endless)) add(validateFields(ENDLESS_FIELDS, s.endless, `${p}.endless`).map((x) => ({ ...x, msg: `무한 모드 ${x.msg}` })));
       else errs.push({ path: `${p}.endless`, msg: `${n}: endless는 객체여야 합니다` });

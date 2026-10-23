@@ -5,7 +5,7 @@ import {
   FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, ENEMY_SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
 } from './shared/world.js';
 import {
-  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, ENDLESS_DEFAULTS, ENDLESS_LIMITS, ENDLESS_INT_KEYS, ENDLESS_SPEED_CAP, ENDLESS_BOSS_HP_CAP, deriveWave, deriveWaves, deriveBossWave,
+  MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, STAGE_CONFIG_KEYS, ENDLESS_DEFAULTS, ENDLESS_LIMITS, ENDLESS_INT_KEYS, ENDLESS_SPEED_CAP, ENDLESS_BOSS_HP_CAP, deriveWave, deriveWaves, deriveBossWave,
 } from './shared/gamedefaults.js';
 
 // ================= 설정 =================
@@ -139,6 +139,33 @@ function sanitizeBossWave(raw, p, stageIdx) {
   }, wp);
 }
 
+// 스테이지에서 덮어쓰는 config 값 하나를 검증 (범위는 전역 config와 같다)
+function cfgValue(key, v, def, path) {
+  switch (key) {
+    case 'soldierSpeed': return num(v, def, 0.1, 50, path);
+    case 'fireIntervals': return numList(v, def, path, 0.02, 60);
+    case 'hitTargets': return numList(v, def, path, 1, 100000);
+    case 'baseHp': return num(v, def, 1, 100000, path);
+    case 'itemInterval': return num(v, def, 0.5, 600, path);
+    case 'itemFirstDelay': return num(v, def, 0, 600, path);
+    case 'crystalZ': return num(v, def, SPAWN_Z, BASE_Z, path);
+    default: return num(v, def, HOMING_LIMITS[key][0], HOMING_LIMITS[key][1], path); // homingR / enemyHomingR / homingSlow
+  }
+}
+// 스테이지에서 덮어쓰는 적 종류 값 하나를 검증
+function etypeValue(key, v, def, path) {
+  switch (key) {
+    case 'name': return str(v, def, path);
+    case 'hp': return num(v, def, 0, 100000, path);
+    case 'speed': return num(v, def, 0, 50, path);
+    case 'r': return num(v, def, 0.05, 10, path);
+    case 'scale': return num(v, def, 0.1, 20, path);
+    case 'dmg': return num(v, def, 0, 100000, path);
+    case 'score': return num(v, def, 0, 1000000, path);
+    default: return color(v, def, path); // color
+  }
+}
+
 function sanitizeData(raw) {
   const d = isObj(raw) ? raw : {};
   if (!isObj(raw)) warn('최상위가 객체가 아니라 전부 기본값 사용');
@@ -228,6 +255,23 @@ function sanitizeData(raw) {
     // 선택 필드: 있을 때만 검증해서 넣는다 (escort = 호위병 수, summon = 소환 간격 초)
     if (b.escort !== undefined) boss.escort = Math.floor(num(b.escort, 0, 0, MAX_ESCORT, `${p}.boss.escort`));
     if (b.summon !== undefined) boss.summon = num(b.summon, 4, 0.5, 600, `${p}.boss.summon`);
+    // 스테이지별 수치: stage.config / stage.enemyTypes에 있는 값만 전역 값 위에 덮어쓴다. 합쳐진 완성본을 cfg / etypes로 둔다
+    const sc = isObj(s.config) ? s.config : {};
+    if (s.config !== undefined && !isObj(s.config)) warn(`${p}.config: 객체가 아니라 무시`);
+    const cfg = { ...config };
+    for (const key of STAGE_CONFIG_KEYS) {
+      if (sc[key] !== undefined) cfg[key] = cfgValue(key, sc[key], config[key], `${p}.config.${key}`);
+    }
+    if (s.enemyTypes !== undefined && !Array.isArray(s.enemyTypes)) warn(`${p}.enemyTypes: 배열이 아니라 무시`);
+    const etypes = enemyTypes.map((g, k) => {
+      const o = Array.isArray(s.enemyTypes) && isObj(s.enemyTypes[k]) ? s.enemyTypes[k] : null;
+      if (!o) return g;
+      const t = { ...g };
+      for (const key of Object.keys(g)) {
+        if (o[key] !== undefined) t[key] = etypeValue(key, o[key], g[key], `${p}.enemyTypes[${k}].${key}`);
+      }
+      return t;
+    });
     const runner = num(s.runner, 0, 0, 1, `${p}.runner`);
     const tank = num(s.tank, 0, 0, 1, `${p}.tank`);
     return {
@@ -240,11 +284,10 @@ function sanitizeData(raw) {
       runner,
       tank,
       boss,
-      // 선택 필드: 스테이지별 유도 반경 (없으면 전역 config 값, 0이면 그 쪽은 유도 없이 직선 이동)
-      ...(s.homingR !== undefined && { homingR: num(s.homingR, HOMING_DEFAULTS.homingR, HOMING_LIMITS.homingR[0], HOMING_LIMITS.homingR[1], `${p}.homingR`) }),
+      cfg,    // 이 스테이지에 적용되는 수치 (전역 + stage.config)
+      etypes, // 이 스테이지에 적용되는 적 종류 (전역 + stage.enemyTypes)
       ...(s.hard !== undefined && { hard: bool(s.hard, false, `${p}.hard`) }),
       ...(s.endless !== undefined && isObj(s.endless) && { endless: sanitizeEndless(s.endless, `${p}.endless`) }),
-      ...(s.enemyHomingR !== undefined && { enemyHomingR: num(s.enemyHomingR, HOMING_DEFAULTS.enemyHomingR, HOMING_LIMITS.enemyHomingR[0], HOMING_LIMITS.enemyHomingR[1], `${p}.enemyHomingR`) }),
       // waves / bossWave가 없으면 예전 고정 공식과 같은 값으로 채운다 (웨이브 k: 개수 3+2k+stageIdx, 간격 1초, 길이 waveDur)
       waves: sanitizeWaves(s.waves, p, i, config.waveDur),
       bossWave: sanitizeBossWave(s.bossWave, p, i),
@@ -285,25 +328,26 @@ if (usingDraft) {
   document.body.appendChild(badge);
 }
 document.getElementById('ver').textContent = `v${version}`; // 화면 오른쪽 아래 버전: package.json의 version이 단일 출처
-const SOLDIER_SPEED = DATA.config.soldierSpeed;
+// 수치는 스테이지마다 다를 수 있다: 아래 let은 loadStage의 applyStageValues가 그 스테이지의 값(전역 + stage.config)으로 바꾼다.
 // 웨이브 길이·간격·개수는 스테이지의 waves / bossWave에서 읽는다 (없으면 sanitizeData가 예전 공식으로 채움, config.waveDur는 그 기본 길이)
-const HOMING_R = DATA.config.homingR;           // 병사 유도 감지 반경
-const ENEMY_HOMING_R = DATA.config.enemyHomingR; // 적 유도 감지 반경
-const HOMING_SLOW = DATA.config.homingSlow;     // 유도 중인 병사·적의 전진 속도 배율
+let SOLDIER_SPEED = DATA.config.soldierSpeed;
+let HOMING_R = DATA.config.homingR;           // 병사 유도 감지 반경
+let ENEMY_HOMING_R = DATA.config.enemyHomingR; // 적 유도 감지 반경
+let HOMING_SLOW = DATA.config.homingSlow;     // 유도 중인 병사·적의 전진 속도 배율
 const SPAWN_MULT = 1;      // 적 생성량 배율 (성능 확인할 때만 올린다)
-const BASE_HP = DATA.config.baseHp;
-const ITEM_INTERVAL = DATA.config.itemInterval;      // 대포 추가 벽 생성 간격(초)
-const ITEM_FIRST_DELAY = DATA.config.itemFirstDelay; // 스테이지 시작 후 첫 벽까지(초)
-const CRYSTAL_Z = DATA.config.crystalZ;              // 2번 강화(얼음) z 위치
+let BASE_HP = DATA.config.baseHp;
+let ITEM_INTERVAL = DATA.config.itemInterval;      // 대포 추가 벽 생성 간격(초)
+let ITEM_FIRST_DELAY = DATA.config.itemFirstDelay; // 스테이지 시작 후 첫 벽까지(초)
+let CRYSTAL_Z = DATA.config.crystalZ;              // 2번 강화(얼음) z 위치
 
 // 공격속도 6단계 (발사 간격) / 다음 단계에 필요한 타격 수
-const FIRE_INTERVALS = DATA.config.fireIntervals;
-const HIT_TARGETS = DATA.config.hitTargets;
+let FIRE_INTERVALS = DATA.config.fireIntervals;
+let HIT_TARGETS = DATA.config.hitTargets;
 const LEVEL_COLORS = [0x6b7480, 0x4fa3ff, 0x4fe0a0, 0xd8e04f, 0xff9a2a, 0xffd23a];
 
 // 적 종류 (인덱스 상수는 코드에 고정, 수치는 JSON)
 const E_NORMAL = 0, E_RUNNER = 1, E_TANK = 2, E_BOSS = 3;
-const ETYPE = DATA.enemyTypes;
+let ETYPE = DATA.enemyTypes; // 이 스테이지의 적 종류 (applyStageValues가 교체)
 
 // 스테이지 목록. 게이트는 {op, val, x, z, w} 명시 배열 (전장 폭 FIELD_W*2 = 14 기준)
 const STAGES = DATA.stages;
@@ -801,9 +845,23 @@ function logStats(title) {
 }
 window.__stats = stats;
 
+// 이 스테이지의 수치(전역 + stage.config)와 적 종류(전역 + stage.enemyTypes)를 적용
+function applyStageValues(st) {
+  const c = st.cfg;
+  SOLDIER_SPEED = c.soldierSpeed; HOMING_R = c.homingR; ENEMY_HOMING_R = c.enemyHomingR; HOMING_SLOW = c.homingSlow;
+  BASE_HP = c.baseHp; ITEM_INTERVAL = c.itemInterval; ITEM_FIRST_DELAY = c.itemFirstDelay; CRYSTAL_Z = c.crystalZ;
+  FIRE_INTERVALS = c.fireIntervals; HIT_TARGETS = c.hitTargets;
+  ETYPE = st.etypes;
+  ETYPE.forEach((t, k) => enemyColors[k].setHex(t.color));
+  crystal.z = CRYSTAL_Z;
+  crystal.mesh.position.z = CRYSTAL_Z;
+  crystal.label.position.z = CRYSTAL_Z;
+}
+
 function loadStage(idx) {
   stageIdx = idx;
   const st = STAGES[idx];
+  applyStageValues(st);
   sCount = 0; eCount = 0; soldierCapT = 0;
   resetStats();
   hp = BASE_HP; stageTime = 0;
@@ -1177,8 +1235,8 @@ function update(dt) {
   const waveIdx = ed ? 0 : waveIndexAt(st, stageTime);
   const bossWave = !ed && waveIdx >= st.waves.length;
   const baseSpeed = ed ? 1.0 + Math.min(ENDLESS_SPEED_CAP, ed.speedPerMin * stageTime / 60) : 1.0 + stageIdx * 0.06;
-  const homingR = st.homingR ?? HOMING_R;             // 이 스테이지의 병사 유도 반경 (스테이지 값 > 전역)
-  const enemyHomingR = st.enemyHomingR ?? ENEMY_HOMING_R; // 이 스테이지의 적 유도 반경
+  const homingR = HOMING_R;           // 이 스테이지의 병사 유도 반경
+  const enemyHomingR = ENEMY_HOMING_R; // 이 스테이지의 적 유도 반경
 
   // --- 대포 발사 ---
   fireTimer += dt;
