@@ -1,13 +1,13 @@
 // 탑뷰 캔버스 렌더 + 마우스 상호작용. 오브젝트 종류는 모르고 objectTypes 레지스트리의 draw/hitTest/onDrag를 호출한다.
 // 좌표계는 게임과 같다: x는 오른쪽 +, z는 아래쪽 +(대포 쪽). 스케일은 창 크기에 맞춰 고정(줌 없음).
 import {
-  FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, WALL_X, WALL_END_Z,
+  FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, ENEMY_SPAWN_Z, BASE_Z, CANNON_Z, WALL_X, WALL_END_Z,
 } from '../shared/world.js';
 import { getTypes } from './objectTypes.js';
 import { listOf, snapTo, round3, objectWarnings, isLocked, isBaseStage } from './model.js';
 
 const X_MIN = -WORLD_HALF - 1.5, X_MAX = WORLD_HALF + 1.5;
-const Z_MIN = SPAWN_Z - 3, Z_MAX = CANNON_Z + 2.5;
+const Z_MIN = ENEMY_SPAWN_Z - 2, Z_MAX = CANNON_Z + 2.5;
 const PAD_L = 34, PAD_R = 8, PAD_T = 8, PAD_B = 22;
 const DRAG_THRESHOLD_PX = 3;
 
@@ -100,17 +100,19 @@ export function createView(canvas, app) {
     dc.text('벽 z<' + WALL_END_Z, -WALL_X, WALL_END_Z + 0.6, { color: '#8a8f99', size: 10 });
     dc.text('벽', WALL_X, WALL_END_Z + 0.6, { color: '#8a8f99', size: 10 });
     // 스폰선 / 방어선 / 대포 영역
-    dc.line(X_MIN, SPAWN_Z, X_MAX, SPAWN_Z, '#e07a3a', 2, true);
-    dc.text(`적 스폰선 z=${SPAWN_Z}`, -FIELD_W + 3.2, SPAWN_Z - 0.6, { color: '#e07a3a', size: 11 });
+    dc.line(X_MIN, ENEMY_SPAWN_Z, X_MAX, ENEMY_SPAWN_Z, '#e07a3a', 2, true);
+    dc.text(`적 스폰선 z=${ENEMY_SPAWN_Z}`, -FIELD_W + 3.2, ENEMY_SPAWN_Z - 0.6, { color: '#e07a3a', size: 11 });
+    dc.line(X_MIN, SPAWN_Z, X_MAX, SPAWN_Z, 'rgba(160,160,160,0.5)', 1, true);
+    dc.text(`병사 소멸선 z=${SPAWN_Z - 3}`, -FIELD_W + 3.2, SPAWN_Z - 0.6, { color: '#999', size: 10 });
     dc.line(X_MIN, BASE_Z, X_MAX, BASE_Z, '#ff4444', 2);
     dc.text(`방어선 z=${BASE_Z}`, -FIELD_W + 2.5, BASE_Z - 0.6, { color: '#ff6666', size: 11 });
     dc.rect(-WORLD_HALF, CANNON_Z - 0.4, WORLD_HALF, CANNON_Z + 0.9, 'rgba(120,200,120,0.18)');
     dc.text(`대포 영역 z=${CANNON_Z}`, 0, CANNON_Z + 0.25, { color: '#8fd08f', size: 11 });
     // 보스 스폰 위치(코드 고정, 표시만)
     g.fillStyle = '#b02a2a'; g.beginPath();
-    g.arc(X(0), Z(SPAWN_Z - 1), 7, 0, Math.PI * 2); g.fill();
-    dc.text(`보스 스폰 (x=0, 고정)`, 0, SPAWN_Z - 1.9, { color: '#e88', size: 11 });
-    dc.text(`호위/일반 스폰 x ±${FIELD_W - 1}`, FIELD_W - 3, SPAWN_Z - 0.6, { color: '#b9784a', size: 10 });
+    g.arc(X(0), Z(ENEMY_SPAWN_Z - 1), 7, 0, Math.PI * 2); g.fill();
+    dc.text(`보스 스폰 (x=0, 고정)`, 0, ENEMY_SPAWN_Z - 1.9, { color: '#e88', size: 11 });
+    dc.text(`호위/일반 스폰 x ±${FIELD_W - 1}`, FIELD_W - 3, ENEMY_SPAWN_Z - 0.6, { color: '#b9784a', size: 10 });
   }
 
   // 잠긴(기본) 스테이지 표시: 우측 상단 배지

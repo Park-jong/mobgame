@@ -18,9 +18,9 @@
     ],
     "baseHp": 20,
     "waveDur": 14,
-    "itemInterval": 8,
+    "itemInterval": 0.8,
     "itemFirstDelay": 3,
-    "crystalZ": -5.5
+    "crystalZ": 2
   },
   "enemyTypes": [
     {
@@ -91,9 +91,30 @@
       "tank": 0,
       "boss": {
         "name": "거대병",
-        "hp": 60,
+        "hp": 600,
         "speed": 0.3,
         "dmg": 10
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
       }
     },
     {
@@ -129,10 +150,31 @@
       "tank": 0,
       "boss": {
         "name": "질주 대장",
-        "hp": 80,
+        "hp": 800,
         "speed": 0.5,
         "dmg": 10,
         "escort": 8
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
       }
     },
     {
@@ -168,9 +210,30 @@
       "tank": 0.12,
       "boss": {
         "name": "철갑 거인",
-        "hp": 200,
+        "hp": 2000,
         "speed": 0.2,
         "dmg": 10
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
       }
     },
     {
@@ -213,10 +276,31 @@
       "tank": 0.15,
       "boss": {
         "name": "소환사",
-        "hp": 250,
+        "hp": 2500,
         "speed": 0.3,
         "dmg": 10,
         "summon": 4
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
       }
     },
     {
@@ -259,10 +343,31 @@
       "tank": 0.2,
       "boss": {
         "name": "최종 보스",
-        "hp": 500,
+        "hp": 5000,
         "speed": 0.25,
         "dmg": 20,
         "summon": 3.5
+      },
+      "waves": [
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 18
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 27
+        },
+        {
+          "duration": 15,
+          "interval": 0.8,
+          "count": 36
+        }
+      ],
+      "bossWave": {
+        "interval": 0.8,
+        "count": 27
       }
     }
   ]

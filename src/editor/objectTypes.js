@@ -11,6 +11,8 @@
 //   fields: [필드 정의]                       속성 패널 폼 (fields.js 참고). obj는 array면 요소, flag면 stage
 //   describe(obj, stage, config) -> string   목록/상태 표시용 짧은 이름
 //   notes(obj, stage, config) -> string[]    패널에 표시할 안내 문구 (선택)
+//   configFields: ['키', ...]                선택 패널에 같이 보여줄 전역 수치 이름 (schema.js CONFIG_FIELDS의 name, 선택).
+//                                            전역 값이라 모든 스테이지에 적용되고, 기본 스테이지가 잠겨 있어도 수정된다
 //   hitTest(obj, x, z, ctx) -> {mode, cursor}|null   ctx = { tol, stage, config }
 //   draw(dc, obj, { selected, warn })        dc = view가 주는 그리기 도구 (rect/text/line/...)
 //   onDrag(start, d) -> patch                d = { mode, grab, pt, dx, dz, snap, stage, config }, start = 드래그 시작 때의 obj 사본
@@ -132,10 +134,10 @@ const crystal = {
   max: 1,
   fields: [
     { name: 'crystalSide', label: '위치(옆 구역)', type: 'select', options: SIDE_OPTIONS },
-    { name: '_z', label: 'z 위치', type: 'note', text: (s, ctx) => `z = ${ctx.config.crystalZ} (전역 config.crystalZ, 모든 스테이지에 적용됨 · 전역 수치에서만 수정)` },
   ],
+  configFields: ['crystalZ'],
   describe: (s) => `얼음 대포 (${s.crystalSide === -1 ? '왼쪽' : '오른쪽'})`,
-  notes: () => ['옆 구역 안에서 좌우 구역만 바뀝니다. 대포 추가 벽과 같은 쪽이면 다른 쪽이 자동 교환됩니다. 세로(z) 드래그는 불가'],
+  notes: () => ['캔버스 드래그는 좌우 구역만 바뀝니다. 세로 위치(z)는 아래 입력칸(전역 수치, 모든 스테이지에 적용)에서 바꿉니다. 대포 추가 벽과 같은 쪽이면 다른 쪽이 자동 교환됩니다'],
   hitTest(s, x, z, ctx) {
     const cx = s.crystalSide * LANE_X;
     const zc = ctx.config.crystalZ;
@@ -165,10 +167,10 @@ const items = {
   max: 1,
   fields: [
     { name: 'itemSide', label: '내려오는 옆 구역', type: 'select', options: SIDE_OPTIONS },
-    { name: '_t', label: '등장 주기', type: 'note', text: (s, ctx) => `첫 등장 ${ctx.config.itemFirstDelay}초 후, 이후 ${ctx.config.itemInterval}초마다 (전역 수치, 모든 스테이지에 적용됨)` },
   ],
+  configFields: ['itemFirstDelay', 'itemInterval'],
   describe: (s) => `대포 추가 벽 (${s.itemSide === -1 ? '왼쪽' : '오른쪽'})`,
-  notes: () => ['위(z=-13)에서 대포 쪽으로 내려오는 벽입니다. 구역만 바꿀 수 있습니다. 얼음 대포와 같은 쪽이면 다른 쪽이 자동 교환됩니다'],
+  notes: () => ['위(z=-13)에서 대포 쪽으로 내려오는 벽입니다. 구역과 등장 주기(전역 수치, 모든 스테이지에 적용)를 바꿀 수 있습니다. 얼음 대포와 같은 쪽이면 다른 쪽이 자동 교환됩니다'],
   hitTest(s, x, z) {
     const cx = s.itemSide * LANE_X;
     return inRect(x, z, cx - LANE_W / 2, cx + LANE_W / 2, ITEM_Z - 1, ITEM_Z + 1) ? { mode: 'move', cursor: 'grab' } : null;

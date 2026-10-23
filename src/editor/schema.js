@@ -61,9 +61,9 @@ export const CONFIG_FIELDS = [
   { name: 'hitTargets', label: '필요 타격 수(Lv0~4)', type: 'numlist', length: 5, min: 1, max: 100000, step: 1, int: true },
   { name: 'baseHp', label: '기지 HP', type: 'number', min: 1, max: 100000, step: 1 },
   { name: 'waveDur', label: '웨이브 길이(초)', type: 'number', min: 1, max: 600, step: 1 },
-  { name: 'itemInterval', label: '대포 추가 벽 간격(초)', type: 'number', min: 0.5, max: 600, step: 0.5 },
+  { name: 'itemInterval', label: '대포 추가 벽 간격(초)', type: 'number', min: 0.5, max: 600, step: 0.1 },
   { name: 'itemFirstDelay', label: '첫 대포 추가 벽까지(초)', type: 'number', min: 0, max: 600, step: 0.5 },
-  { name: 'crystalZ', label: '얼음 대포 z', type: 'number', min: SPAWN_Z, max: BASE_Z, step: 0.5 },
+  { name: 'crystalZ', label: '얼음 대포 z', type: 'number', min: SPAWN_Z, max: BASE_Z, step: 0.1 },
   // 반경 상한 4: 격자(셀 2칸) 5x5 탐색이 놓치지 않는 한계 (shared/gamedefaults.js 참고)
   { name: 'homingR', label: '병사 유도 반경', type: 'number', min: HOMING_LIMITS.homingR[0], max: HOMING_LIMITS.homingR[1], step: 0.1, ...withDefault('homingR') },
   { name: 'enemyHomingR', label: '적 유도 반경', type: 'number', min: HOMING_LIMITS.enemyHomingR[0], max: HOMING_LIMITS.enemyHomingR[1], step: 0.1, ...withDefault('enemyHomingR') },

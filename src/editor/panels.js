@@ -316,6 +316,15 @@ export function createPanels(els, app) {
     });
     forms.push(f);
     box.append(f.el);
+    // 타입이 선언한 전역 수치(configFields)는 같은 자리에서 바로 수정한다. 전역 값이라 스테이지 잠금과 무관하다
+    if (type.configFields?.length) {
+      const cf = CONFIG_FIELDS.filter((x) => type.configFields.includes(x.name));
+      const g = buildForm(cf, () => app.getData().config, {
+        onInput: (field, v) => edit(() => app.setConfigField(field, v)),
+      });
+      forms.push(g);
+      box.append(h('h4', {}, '전역 수치 ', h('span', { class: 'tag', text: '모든 스테이지에 적용됨' })), g.el);
+    }
     for (const t of (type.notes ? type.notes(obj(), stage, app.getData().config) : [])) box.append(h('div', { class: 'hint', text: t }));
   }
 
