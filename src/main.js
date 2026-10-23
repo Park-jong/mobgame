@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gameData from './data/game.json';
 import {
-  FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
+  FIELD_W, LANE_GAP, LANE_W, LANE_X, WORLD_HALF, SPAWN_Z, ENEMY_SPAWN_Z, BASE_Z, CANNON_Z, GATE_SLOTS, WALL_X, WALL_END_Z,
 } from './shared/world.js';
 import {
   MAX_WAVES, WAVE_LIMITS, HOMING_DEFAULTS, HOMING_LIMITS, deriveWave, deriveWaves, deriveBossWave,
@@ -380,7 +380,7 @@ function makeCannonModel(level) {
   wheel.rotation.z = Math.PI / 2;
   g.add(barrel, wheel);
   g.position.y = 0.7;
-  return { group: g, barrel, barrelMat, wheelMat };
+  return { group: g, barrel, wheel, barrelMat, wheelMat };
 }
 // 레벨에 맞는 색/포신 굵기 (본체 대포 render()와 같은 규칙)
 function setCannonLevel(m, level) {
@@ -388,7 +388,7 @@ function setCannonLevel(m, level) {
   m.barrel.scale.set(1 + level * 0.1, 1, 1 + level * 0.1);
 }
 for (let i = 0; i < MAX_CANNONS; i++) {
-  const { group: g, barrel, barrelMat, wheelMat } = makeCannonModel(0);
+  const { group: g, barrel, wheel, barrelMat, wheelMat } = makeCannonModel(0);
   g.visible = false;
   scene.add(g);
   // 대포 추가 발광: emissive만 쓰므로 공격속도 레벨 색(color)과 충돌하지 않는다. 평소 intensity 0 = 발광 없음
@@ -396,7 +396,7 @@ for (let i = 0; i < MAX_CANNONS; i++) {
   wheelMat.emissive.setHex(CANNON_GLOW_COLOR);
   barrelMat.emissiveIntensity = 0;
   wheelMat.emissiveIntensity = 0;
-  cannonMeshes.push({ group: g, barrel, barrelMat, wheelMat });
+  cannonMeshes.push({ group: g, barrel, wheel, barrelMat, wheelMat });
 }
 
 // 얼음에서 빠져나와 대포 대형으로 날아가는 대포 (풀 재사용, 연속 달성 대비 레벨 수만큼)
@@ -462,10 +462,18 @@ scene.add(fxMesh);
 const CANNON_POP_DUR = 0.35;
 let cannonPopT = 0;
 
+// 발사 연출 (순수 시각용): 발사 직전 FIRE_CHARGE_MAX 이내 구간에서 포신이 굵게 부풀고, 발사 순간 움츠렸다가(반동) 원래 굵기로 돌아온다. 몸통·전체 크기는 그대로
+const FIRE_CHARGE_MAX = 0.3;   // 부푸는 구간 길이(초) 상한. 연사 간격이 짧으면 간격의 60%
+const FIRE_CHARGE_SWELL = 0.22; // 발사 직전 최대 팽창 비율
+const FIRE_KICK_DUR = 0.14;    // 발사 직후 반동 구간(초)
+const FIRE_KICK_SQUASH = 0.12; // 반동 시 최대 수축 비율
+let fireKickT = 0;
+
 function fxClear() {
   fxCount = 0;
   fxMesh.count = 0;
   cannonPopT = 0;
+  fireKickT = 0;
   // 얼음 대포 연출 초기화: 날아가던 대포 제거, 표시 레벨을 실제 레벨에 맞춘다
   for (const f of flyers) { f.active = false; f.m.group.visible = false; }
   crystal.hitFxT = 0;
@@ -536,6 +544,7 @@ function fxUpdate(dt) {
   fxMesh.instanceMatrix.needsUpdate = true;
   fxMesh.instanceColor.needsUpdate = true;
   if (cannonPopT > 0) cannonPopT = Math.max(0, cannonPopT - dt);
+  if (fireKickT > 0) fireKickT = Math.max(0, fireKickT - dt);
   if (crystal.hitFxT > 0) crystal.hitFxT -= dt;
 
   // 얼음에서 빠져나온 대포: 포물선으로 현재 대포 대형 중심까지 날아가고, 도착하면 대포 모습이 바뀐다
@@ -740,10 +749,33 @@ let cannonCount, cannonX, fireLevel;
 let shownLevel = 0; // 대포 모습(색/포신 굵기)에 쓰는 표시용 레벨. 얼음 속 대포가 도착하면 fireLevel을 따라간다
 let bossSpawned, bossMaxHp, bossAtk;
 
+// 밸런스 확인용 누적 통계 (스테이지 시작마다 초기화). ?stats=1 이면 HUD에 표시하고 클리어/게임오버 시 콘솔에 표로 출력 (카운트와 window.__stats 조회는 항상 동작)
+const STATS_ON = new URLSearchParams(location.search).get('stats') === '1';
+const stats = {
+  fired: 0,   // 아군 생성: 대포 발사
+  gate: 0,    // 아군 생성: 게이트(+N, ×N) 증식분
+  enemy: 0,   // 적 생성 합계 (보스·호위병·소환 포함)
+  exit: 0,    // 아군 소멸: 적진 끝까지 도달
+  fight: 0,   // 아군 소멸: 적과 충돌
+  crystal: 0, // 아군 소멸: 얼음 대포 타격에 소모
+  kill: 0,    // 적 처치
+  leak: 0,    // 적이 방어선 도달 (일반 적)
+};
+// ?fill=1 이면 스테이지 시작 시 적을 상한까지 위쪽에 가득 채운다 (부하·극한 확인용, 스테이지의 러너·탱커 비율 사용)
+const FILL_ON = new URLSearchParams(location.search).get('fill') === '1';
+function resetStats() { for (const k in stats) stats[k] = 0; }
+function logStats(title) {
+  if (!STATS_ON) return;
+  console.log(`[stats] ${title}`);
+  console.table({ ...stats, total: stats.fired + stats.gate });
+}
+window.__stats = stats;
+
 function loadStage(idx) {
   stageIdx = idx;
   const st = STAGES[idx];
   sCount = 0; eCount = 0; soldierCapT = 0;
+  resetStats();
   hp = BASE_HP; stageTime = 0;
   score = 0; dragging = false; // 점수는 스테이지 시도마다 초기화
   fireTimer = 0; spawnTimer = 0; itemTimer = ITEM_FIRST_DELAY; summonTimer = 0;
@@ -757,6 +789,7 @@ function loadStage(idx) {
   crystal.mesh.visible = crystal.label.visible = st.crystal;
   drawCrystalLabel();
   buildGates(st.gates);
+  if (FILL_ON) fillEnemies(st);
   fxClear();
   clearItems();
   showOverlay(`STAGE ${idx + 1}`, st.desc, '클릭 또는 Enter로 시작 · 아래 번호로 스테이지 선택 · 대포를 잡고 드래그');
@@ -781,10 +814,11 @@ function setState(s) {
 // ---- 개체 추가/제거 ----
 // flags: 통과 플래그 배열(flagOff부터 GATE_SLOTS개) 또는 null
 function addSoldier(x, z, vx, flags, flagOff = 0) {
-  if (sCount >= MAX_SOLDIERS) { soldierCapT = 1; return; } // 상한: 버려지며 HUD에 MAX 표시
+  if (sCount >= MAX_SOLDIERS) { soldierCapT = 1; return false; } // 상한: 버려지며 HUD에 MAX 표시
   const i = sCount++;
   sx[i] = x; sz[i] = z; svx[i] = vx;
   for (let g = 0; g < GATE_SLOTS; g++) sGate[i * GATE_SLOTS + g] = flags ? flags[flagOff + g] : 0;
+  return true;
 }
 function removeSoldier(i) {
   const l = --sCount;
@@ -796,10 +830,11 @@ function enemyHp(type) {
   return Math.max(1, Math.round(ETYPE[type].hp * (1 + stageIdx * 0.15)));
 }
 // 일반 적은 보스 전용 여유 슬롯(ENEMY_RESERVE)을 남기고 막는다. 보스·호위병은 reserved=true로 전체 슬롯을 쓴다.
-function addEnemy(x, type, z = SPAWN_Z, reserved = false) {
+function addEnemy(x, type, z = ENEMY_SPAWN_Z, reserved = false) {
   if (eCount >= (reserved ? MAX_ENEMIES : MAX_ENEMIES - ENEMY_RESERVE)) return false;
   const i = eCount++;
   ex[i] = x; ez[i] = z; etype[i] = type; ehp[i] = enemyHp(type);
+  stats.enemy++;
   return true;
 }
 function removeEnemy(i) {
@@ -1012,28 +1047,64 @@ function waveIndexAt(st, t) {
   }
   return st.waves.length;
 }
+// 전장 폭 전체를 채우는 줄(행)을 ENEMY_SPAWN_Z부터 화면 위쪽으로 쌓아 상한까지 채운다 → 위에서부터 빽빽하게 내려온다
+// 적 줄 배치 간격 (fillEnemies와 넓은 웨이브 생성이 같이 쓴다)
+const FILL_STEP = 0.8;
+// 한 번에 이 수 이상 나오는 웨이브는 한 덩어리가 아니라 전장 폭 전체에 줄지어 나온다
+const WIDE_GROUP_MIN = 12;
+function fillEnemies(st) {
+  const step = FILL_STEP, half = WALL_X - 0.8;
+  for (let row = 0; ; row++) {
+    const z = ENEMY_SPAWN_Z - row * step;
+    for (let x = -half + (row % 2) * step / 2; x <= half; x += step) {
+      if (!addEnemy(x + (Math.random() - 0.5) * 0.2, pickEnemyType(st.runner, st.tank), z + (Math.random() - 0.5) * 0.2)) return;
+    }
+  }
+}
+function pickEnemyType(runnerR, tankR) {
+  const r = Math.random();
+  if (r < tankR) return E_TANK;
+  if (r < tankR + runnerR) return E_RUNNER;
+  return E_NORMAL;
+}
 function spawnGroup(waveIdx, isBossWave) {
   const st = STAGES[stageIdx];
   const wave = isBossWave ? st.bossWave : st.waves[waveIdx];
   const n = wave.count * SPAWN_MULT;
   const runnerR = wave.runner ?? st.runner; // 웨이브 값이 없으면 스테이지 값
   const tankR = wave.tank ?? st.tank;
+  if (n >= WIDE_GROUP_MIN) {
+    // 많이 나오는 웨이브: 전장 폭 전체를 줄(행)로 채운다 (fillEnemies와 같은 배치).
+    // 한 번에 나오는 행들은 다음 생성 전까지 적이 이동하는 거리(간격 × 기본 속도) 안에 고르게 펼쳐서 다음 그룹과 이어 붙게 한다
+    const perRow = Math.floor((WALL_X - 0.8) * 2 / FILL_STEP) + 1;
+    const rows = Math.ceil(n / perRow);
+    const depth = wave.interval * (1.0 + stageIdx * 0.06);
+    let left = n;
+    for (let r = 0; r < rows; r++) {
+      let m = Math.min(perRow, left);
+      left -= m;
+      const z = ENEMY_SPAWN_Z - (r / rows) * depth;
+      for (let j = 0; j < perRow && m > 0; j++) {
+        if (Math.random() * (perRow - j) >= m) continue; // 행 안에서 m개 자리를 무작위로 고름
+        m--;
+        const x = -(WALL_X - 0.8) + j * FILL_STEP;
+        addEnemy(x + (Math.random() - 0.5) * 0.2, pickEnemyType(runnerR, tankR), z - Math.random() * 0.3);
+      }
+    }
+    return;
+  }
   const cx = (Math.random() * 2 - 1) * (FIELD_W - 2);
   for (let k = 0; k < n; k++) {
-    const r = Math.random();
-    let type = E_NORMAL;
-    if (r < tankR) type = E_TANK;
-    else if (r < tankR + runnerR) type = E_RUNNER;
-    addEnemy(cx + (Math.random() - 0.5) * 3.5, type, SPAWN_Z - Math.random() * 1.5);
+    addEnemy(cx + (Math.random() - 0.5) * 3.5, pickEnemyType(runnerR, tankR), ENEMY_SPAWN_Z - Math.random() * 1.5);
   }
 }
 function spawnBoss() {
   const b = STAGES[stageIdx].boss;
   // 보스는 여유 슬롯을 쓰므로 일반적으로 실패하지 않지만, 실패하면 다음 프레임에 다시 시도한다
-  if (!addEnemy(0, E_BOSS, SPAWN_Z - 1, true)) return;
+  if (!addEnemy(0, E_BOSS, ENEMY_SPAWN_Z - 1, true)) return;
   bossMaxHp = b.hp;
   if (b.escort) {
-    for (let k = 0; k < b.escort; k++) addEnemy((Math.random() * 2 - 1) * (FIELD_W - 1), E_RUNNER, SPAWN_Z - Math.random() * 3, true);
+    for (let k = 0; k < b.escort; k++) addEnemy((Math.random() * 2 - 1) * (FIELD_W - 1), E_RUNNER, ENEMY_SPAWN_Z - Math.random() * 3, true);
   }
   bossSpawned = true;
 }
@@ -1051,9 +1122,10 @@ function update(dt) {
   const interval = FIRE_INTERVALS[fireLevel];
   while (fireTimer >= interval) {
     fireTimer -= interval;
+    fireKickT = FIRE_KICK_DUR;
     for (let c = 0; c < cannonCount; c++) {
       const [dx, dz] = CANNON_OFFSETS[cannonCount][c];
-      addSoldier(cannonX + dx + (Math.random() - 0.5) * 0.3, CANNON_Z + dz - 2 * CANNON_SCALE, (Math.random() - 0.5) * 0.8, null);
+      if (addSoldier(cannonX + dx + (Math.random() - 0.5) * 0.3, CANNON_Z + dz - 2 * CANNON_SCALE, (Math.random() - 0.5) * 0.8, null)) stats.fired++;
     }
   }
 
@@ -1164,6 +1236,7 @@ function update(dt) {
       }
     } else if (ez[i] >= BASE_Z) {
       hp -= ETYPE[t].dmg;
+      stats.leak++;
       removeEnemy(i);
       continue;
     }
@@ -1182,6 +1255,7 @@ function update(dt) {
     hp = 0;
     showOverlay('GAME OVER', `STAGE ${stageIdx + 1}\n점수 ${score}`, '클릭하여 다시 도전 · 번호로 스테이지 선택');
     setState('over');
+    logStats(`STAGE ${stageIdx + 1} GAME OVER`);
     dragging = false;
     return;
   }
@@ -1248,7 +1322,7 @@ function update(dt) {
     if (sx[i] < -WORLD_HALF) { sx[i] = -WORLD_HALF; svx[i] = Math.abs(svx[i]); }
     if (sx[i] > WORLD_HALF) { sx[i] = WORLD_HALF; svx[i] = -Math.abs(svx[i]); }
 
-    if (sz[i] < SPAWN_Z - 3) { deadBuf[deadCount++] = i; continue; }
+    if (sz[i] < SPAWN_Z - 3) { deadBuf[deadCount++] = i; stats.exit++; continue; }
 
     // 게이트 통과 (파괴된 게이트는 무시)
     for (let gi = 0; gi < gates.length; gi++) {
@@ -1276,6 +1350,7 @@ function update(dt) {
       const dx = sx[i] - crystal.x, dz = sz[i] - crystal.z;
       if (Math.abs(dx) < ICE_W / 2 + SOLDIER_R && Math.abs(dz) < ICE_D / 2 + SOLDIER_R) { // 얼음 박스 직사각형 판정
         deadBuf[deadCount++] = i;
+        stats.crystal++;
         crystal.hits++;
         crystalChanged = true;
         if (crystal.hits >= HIT_TARGETS[fireLevel]) {
@@ -1306,14 +1381,14 @@ function update(dt) {
           const ddx = ex[e] - sx[i], ddz = ez[e] - sz[i];
           if (ddx * ddx + ddz * ddz < rr * rr) {
             ehp[e]--;
-            if (ehp[e] <= 0) score += ETYPE[etype[e]].score;
+            if (ehp[e] <= 0) { score += ETYPE[etype[e]].score; stats.kill++; }
             hit = true;
             break;
           }
         }
       }
     }
-    if (hit) deadBuf[deadCount++] = i;
+    if (hit) { deadBuf[deadCount++] = i; stats.fight++; }
   }
   if (crystalChanged) drawCrystalLabel();
 
@@ -1329,7 +1404,7 @@ function update(dt) {
 
   for (let k = deadCount - 1; k >= 0; k--) removeSoldier(deadBuf[k]);
   for (let i = eCount - 1; i >= 0; i--) if (ehp[i] <= 0) removeEnemy(i);
-  for (let k = 0; k < spawnCount; k++) addSoldier(spawnX[k], spawnZ[k], spawnVx[k], spawnFlags, k * GATE_SLOTS);
+  for (let k = 0; k < spawnCount; k++) if (addSoldier(spawnX[k], spawnZ[k], spawnVx[k], spawnFlags, k * GATE_SLOTS)) stats.gate++;
   soldierCapT = Math.max(0, soldierCapT - dt);
 
   // --- 스테이지 클리어 ---
@@ -1338,6 +1413,7 @@ function update(dt) {
     if (last) showOverlay('ALL CLEAR!', `모든 스테이지를 클리어했습니다\n점수 ${score}`, '클릭하여 처음부터 · 번호로 스테이지 선택');
     else showOverlay(`STAGE ${stageIdx + 1} CLEAR`, `점수 ${score}`, '클릭하여 다음 스테이지 · 번호로 스테이지 선택');
     setState(last ? 'win' : 'clear');
+    logStats(`STAGE ${stageIdx + 1} CLEAR`);
     dragging = false;
   }
 }
@@ -1396,10 +1472,18 @@ function render() {
         const s = Math.sin(Math.PI * (1 - cannonPopT / CANNON_POP_DUR));
         pop = 1 + (c === cannonCount - 1 && cannonCount > 1 ? 0.45 : 0.12) * s;
       }
+      // 발사 연출: 발사 직전 서서히 부풀다가(가속), 발사 순간 움츠렸다 돌아온다 (포신 굵기만, 몸통·그룹 크기는 그대로)
+      let fireMul = 1;
+      if (state === 'play') {
+        const charge = Math.min(FIRE_CHARGE_MAX, FIRE_INTERVALS[fireLevel] * 0.6);
+        const cp = Math.min(1, Math.max(0, (fireTimer - (FIRE_INTERVALS[fireLevel] - charge)) / charge));
+        fireMul += FIRE_CHARGE_SWELL * cp * cp - FIRE_KICK_SQUASH * (fireKickT / FIRE_KICK_DUR);
+      }
       m.group.scale.setScalar(CANNON_SCALE * pop);
       tmpColor.setHex(LEVEL_COLORS[shownLevel]);
       m.barrelMat.color.copy(tmpColor);
-      m.barrel.scale.set(1 + shownLevel * 0.1, 1, 1 + shownLevel * 0.1);
+      const bt = (1 + shownLevel * 0.1) * fireMul; // 포신 굵기: 레벨 굵기 × 발사 연출 (길이는 그대로)
+      m.barrel.scale.set(bt, 1, bt);
       // 대포 추가 발광: 팝과 같은 타이머로 번쩍였다가 사라진다 (끝나면 정확히 0으로 복원)
       let glow = 0;
       if (cannonPopT > 0 && cannonCount > 1) {
@@ -1414,7 +1498,11 @@ function render() {
   const wave = waveIndexAt(STAGES[stageIdx], stageTime);
   hud.textContent =
     `STAGE ${stageIdx + 1}/${STAGES.length}  ${wave >= waveCount ? 'BOSS' : `웨이브 ${wave + 1}/${waveCount}`}   HP ${hp}   점수 ${score}\n` +
-    `병사 ${sCount}${sCount >= MAX_SOLDIERS || soldierCapT > 0 ? ' MAX' : ''}   대포 ${cannonCount}   공격속도 Lv${fireLevel}`;
+    `병사 ${sCount}${sCount >= MAX_SOLDIERS || soldierCapT > 0 ? ' MAX' : ''}   대포 ${cannonCount}   공격속도 Lv${fireLevel}` +
+    (STATS_ON
+      ? `\n[통계] 아군생성 ${stats.fired + stats.gate} (발사 ${stats.fired} + 게이트 ${stats.gate})   적생성 ${stats.enemy}\n` +
+        `아군소멸: 끝도달 ${stats.exit} · 적과전투 ${stats.fight} · 얼음타격 ${stats.crystal}   적처치 ${stats.kill} · 방어선도달 ${stats.leak}`
+      : '');
   hud.style.whiteSpace = 'pre-line';
   renderer.render(scene, camera);
 }
